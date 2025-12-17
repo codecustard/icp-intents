@@ -1,6 +1,6 @@
 # ICP Intents - Cross-Chain Intent-Based Swap Library
 
-A production-ready Motoko library/SDK for building permissionless cross-chain intent-based swap systems on the Internet Computer Protocol (ICP). Inspired by NEAR Intents but optimized for ICP's unique capabilities including Chain Fusion and threshold ECDSA (tECDSA).
+A Motoko library/SDK for building permissionless cross-chain intent-based swap systems on the Internet Computer Protocol (ICP). Inspired by NEAR Intents but optimized for ICP's unique capabilities including Chain Fusion and threshold ECDSA (tECDSA).
 
 ## 🚀 Features
 
@@ -11,7 +11,6 @@ A production-ready Motoko library/SDK for building permissionless cross-chain in
 - **EVM Verification**: Uses official EVM RPC canister for multi-provider consensus
 - **Anti-Griefing**: 2-step flow (quote → confirm) prevents solver spam
 - **Modular Design**: Use individual components or the full system
-- **Production-Ready**: Upgrade-safe, cycle-efficient, comprehensive error handling
 - **Extensible**: Built with hooks for custom chains and verification methods
 
 ## 📋 Table of Contents
@@ -189,7 +188,7 @@ let address = await TECDSA.deriveAddress(config, intentId, userPrincipal);
 // Returns: "0xabc123..."
 ```
 
-**Note**: Uses production Keccak256 from the [mops sha3 package](https://mops.one/sha3) for secure Ethereum address generation.
+**Note**: Uses Keccak256 from the [mops sha3 package](https://mops.one/sha3) for secure Ethereum address generation.
 
 ### Verification Module (`src/icp-intents-lib/Verification.mo`)
 
@@ -319,7 +318,7 @@ Update in your canister:
 ### ⚠️ CRITICAL: Before Production
 
 1. **Keccak256 Implementation**
-   - ✅ Uses production Keccak256 from [mops sha3 package](https://mops.one/sha3)
+   - ✅ Uses Keccak256 from [mops sha3 package](https://mops.one/sha3)
    - Generates secure Ethereum addresses from tECDSA public keys
 
 2. **Unique Derivation Paths**
@@ -344,7 +343,7 @@ Update in your canister:
 
 ### Security Audit Checklist
 
-- [x] Production Keccak256 implementation
+- [x] Keccak256 implementation
 - [ ] Audit tECDSA derivation uniqueness
 - [ ] Verify escrow accounting
 - [ ] Test all error paths
