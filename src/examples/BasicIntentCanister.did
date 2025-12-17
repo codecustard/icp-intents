@@ -1,0 +1,145 @@
+type IntentStatus = variant {
+  Open;
+  Quoted;
+  Locked;
+  Fulfilled;
+  Refunded;
+  Cancelled;
+};
+
+type ChainAsset = record {
+  chain: text;
+  chain_id: opt nat;
+  token: text;
+  network: text;
+};
+
+type Quote = record {
+  solver: principal;
+  output_amount: nat;
+  fee: nat;
+  expiry: int;
+  submitted_at: int;
+};
+
+type Intent = record {
+  id: nat;
+  user: principal;
+  source: ChainAsset;
+  destination: ChainAsset;
+  dest_recipient: text;
+  source_amount: nat;
+  min_output: nat;
+  created_at: int;
+  deadline: int;
+  status: IntentStatus;
+  quotes: vec Quote;
+  selected_quote: opt Quote;
+  escrow_balance: nat;
+  generated_address: opt text;
+  solver_tx_hash: opt text;
+  verified_at: opt int;
+  protocol_fee_bps: nat;
+  custom_rpc_urls: opt vec text;
+  verification_hints: opt text;
+  metadata: opt text;
+};
+
+type CreateIntentRequest = record {
+  source: ChainAsset;
+  destination: ChainAsset;
+  dest_recipient: text;
+  source_amount: nat;
+  min_output: nat;
+  deadline: int;
+  custom_rpc_urls: opt vec text;
+  verification_hints: opt text;
+  metadata: opt text;
+};
+
+type SubmitQuoteRequest = record {
+  intent_id: nat;
+  output_amount: nat;
+  fee: nat;
+  expiry: int;
+};
+
+type IntentError = variant {
+  NotFound;
+  Unauthorized;
+  InvalidStatus: text;
+  InsufficientBalance;
+  QuoteExpired;
+  DeadlinePassed;
+  InvalidAmount;
+  InvalidChain;
+  InvalidToken;
+  InvalidAddress;
+  VerificationFailed: text;
+  ECDSAError: text;
+  RPCError: text;
+  AlreadyExists;
+  InternalError: text;
+};
+
+type IntentResult = variant {
+  ok: nat;
+  err: IntentError;
+};
+
+type IntentResultUnit = variant {
+  ok;
+  err: IntentError;
+};
+
+type IntentResultText = variant {
+  ok: text;
+  err: IntentError;
+};
+
+type PagedIntents = record {
+  data: vec Intent;
+  total: nat;
+  offset: nat;
+  limit: nat;
+};
+
+type EscrowAccount = record {
+  owner: principal;
+  token: text;
+  balance: nat;
+  locked: nat;
+  available: nat;
+};
+
+type SystemStats = record {
+  total_intents: nat;
+  open_intents: nat;
+  fulfilled_intents: nat;
+};
+
+service : {
+  // User-facing endpoints
+  "postIntent": (CreateIntentRequest) -> (IntentResult);
+  "getIntent": (nat) -> (opt Intent) query;
+  "getIntents": (nat, nat) -> (PagedIntents) query;
+  "getMyIntents": () -> (vec Intent) query;
+  "confirmQuote": (nat, nat) -> (IntentResultText);
+  "cancelIntent": (nat) -> (IntentResultUnit);
+
+  // Solver-facing endpoints
+  "submitQuote": (SubmitQuoteRequest) -> (IntentResultUnit);
+  "claimFulfillment": (nat, opt text) -> (IntentResultUnit);
+  "getMySolverIntents": () -> (vec Intent) query;
+
+  // Escrow management
+  "depositEscrow": (text, nat) -> (IntentResultUnit);
+  "withdrawEscrow": (text, nat) -> (IntentResult);
+  "getEscrowBalance": (text) -> (EscrowAccount) query;
+  "getMyEscrowAccounts": () -> (vec EscrowAccount) query;
+
+  // Utilities
+  "validateAddress": (text) -> (bool) query;
+  "calculateFee": (nat) -> (nat) query;
+  "getStats": () -> (SystemStats) query;
+}

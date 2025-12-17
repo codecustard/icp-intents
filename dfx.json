@@ -3,12 +3,16 @@
     "icp-intents-backend": {
       "main": "src/icp-intents-backend/main.mo",
       "type": "motoko"
+    },
+    "BasicIntentCanister": {
+      "main": "src/examples/BasicIntentCanister.mo",
+      "type": "motoko"
     }
   },
   "defaults": {
     "build": {
       "args": "",
-      "packtool": ""
+      "packtool": "mops sources"
     }
   },
   "output_env_file": ".env",

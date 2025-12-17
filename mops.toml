@@ -1,0 +1,12 @@
+[package]
+name = "icp-intents"
+version = "0.1.0"
+description = "Permissionless cross-chain intent-based swap system on ICP"
+repository = "https://github.com/codecustard/icp-intents"
+keywords = ["intents", "cross-chain", "chain-fusion", "defi"]
+license = "MIT"
+
+[dependencies]
+base = "0.11.1"
+map = "9.0.1"
+sha3 = "0.1.1"
