@@ -18,6 +18,7 @@ import Timer "mo:base/Timer";
 import Nat "mo:base/Nat";
 import Debug "mo:base/Debug";
 import Result "mo:base/Result";
+import ExperimentalCycles "mo:base/ExperimentalCycles";
 
 // Import the library modules
 import Types "../icp-intents-lib/Types";
@@ -299,6 +300,26 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
       total_intents = allIntents.total;
       open_intents = open;
       fulfilled_intents = fulfilled;
+    }
+  };
+
+  /// Get canister cycles balance (monitoring)
+  public query func getCyclesBalance() : async Nat {
+    ExperimentalCycles.balance()
+  };
+
+  /// Check if cycles balance is critically low
+  public query func isLowOnCycles() : async {
+    balance: Nat;
+    isLow: Bool;
+    threshold: Nat;
+  } {
+    let balance = ExperimentalCycles.balance();
+    let threshold = 1_000_000_000_000; // 1T cycles (minimum safe threshold)
+    {
+      balance = balance;
+      isLow = balance < threshold;
+      threshold = threshold;
     }
   };
 

@@ -142,4 +142,8 @@ service : {
   "validateAddress": (text) -> (bool) query;
   "calculateFee": (nat) -> (nat) query;
   "getStats": () -> (SystemStats) query;
+
+  // Cycles monitoring
+  "getCyclesBalance": () -> (nat) query;
+  "isLowOnCycles": () -> (record { balance: nat; isLow: bool; threshold: nat }) query;
 }

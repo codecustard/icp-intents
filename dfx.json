@@ -2,11 +2,13 @@
   "canisters": {
     "icp-intents-backend": {
       "main": "src/icp-intents-backend/main.mo",
-      "type": "motoko"
+      "type": "motoko",
+      "wasm_memory_persistence": "keep"
     },
     "BasicIntentCanister": {
       "main": "src/examples/BasicIntentCanister.mo",
-      "type": "motoko"
+      "type": "motoko",
+      "wasm_memory_persistence": "keep"
     }
   },
   "defaults": {
