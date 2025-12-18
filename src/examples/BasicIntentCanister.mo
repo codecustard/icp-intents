@@ -33,47 +33,51 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
   type PagedIntents = Types.PagedIntents;
   type EscrowAccount = Types.EscrowAccount;
 
-  // Stable state for upgrades
+  // STABLE STATE - Persists across upgrades (implicitly stable in persistent actor)
   var stableIntentState : ?{
     nextIntentId: Nat;
     intents: [(Nat, Intent)];
     events: [Types.Event];
-    escrowAccounts: [(Principal, Text, EscrowAccount)];
+    escrowAccounts: [((Principal, Text), EscrowAccount)];
   } = null;
 
-  // Protocol configuration (transient)
-  transient let protocolConfig : Types.ProtocolConfig = {
+  // Admin principal - set on first deployment, persists across upgrades
+  var adminPrincipal : Principal = init_msg.caller;
+  var feeCollectorPrincipal : Principal = init_msg.caller;
+
+  // Protocol configuration (reconstructed on each upgrade)
+  let protocolConfig : Types.ProtocolConfig = {
     default_protocol_fee_bps = 30;  // 0.3%
     max_protocol_fee_bps = 100;     // 1%
     min_intent_amount = 100_000;    // Minimum to prevent spam
     max_intent_lifetime = 7 * 24 * 60 * 60 * 1_000_000_000; // 7 days in nanoseconds
-    admin = init_msg.caller;
-    fee_collector = init_msg.caller;  // Could be treasury canister
+    admin = adminPrincipal;
+    fee_collector = feeCollectorPrincipal;
     paused = false;
   };
 
   // tECDSA configuration (use test_key_1 for local/testing, key_1 for mainnet)
-  transient let tecdsaConfig : Types.ECDSAConfig = {
+  let tecdsaConfig : Types.ECDSAConfig = {
     key_name = "test_key_1";
     derivation_path = [];
   };
 
   // Verification configuration
   // Replace with actual EVM RPC canister ID in production
-  transient let verificationConfig = {
+  let verificationConfig = {
     evm_rpc_canister_id = Principal.fromText("7hfb6-caaaa-aaaar-qadga-cai");
     min_confirmations = 12;  // ~3 minutes on Ethereum
   };
 
   // Supported chains (mainnets and testnets)
-  transient let supportedChains : [Nat] = [
+  let supportedChains : [Nat] = [
     1,        // Ethereum mainnet
     8453,     // Base mainnet
     11155111, // Sepolia testnet (FREE!)
     84532,    // Base Sepolia testnet (FREE!)
   ];
 
-  // Initialize state (transient)
+  // Transient (non-stable) state - reconstructed from stable data on upgrade
   transient var intentState = IntentManager.init(
     protocolConfig,
     tecdsaConfig,
@@ -81,21 +85,33 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
     supportedChains
   );
 
+  // Save state before upgrade
+  system func preupgrade() {
+    Debug.print("Saving state for upgrade...");
+    stableIntentState := ?IntentManager.serializeState(intentState);
+    Debug.print("Saved " # Nat.toText(intentState.intents.size()) # " intents");
+  };
+
   // Restore state after upgrade
   system func postupgrade() {
     switch (stableIntentState) {
-      case (? state) {
-        // Restore state (simplified - in production, properly reconstruct HashMap)
-        Debug.print("Restored " # Nat.toText(state.intents.size()) # " intents");
+      case (?serialized) {
+        Debug.print("Restoring state from upgrade...");
+        intentState := IntentManager.deserializeState(
+          protocolConfig,
+          tecdsaConfig,
+          verificationConfig,
+          supportedChains,
+          serialized
+        );
+        Debug.print("Restored " # Nat.toText(intentState.intents.size()) # " intents");
+        // Clear stable state to free memory
+        stableIntentState := null;
       };
-      case null {};
+      case null {
+        Debug.print("Fresh initialization - no state to restore");
+      };
     };
-  };
-
-  // Save state before upgrade
-  system func preupgrade() {
-    // Save state (simplified - in production, properly serialize HashMap)
-    Debug.print("Saving state for upgrade");
   };
 
   // ===========================
@@ -234,6 +250,31 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
     };
     // In production, update config in stable var
     #ok(())
+  };
+
+  /// Transfer admin rights (admin only)
+  public shared(msg) func setAdmin(newAdmin: Principal) : async Result.Result<(), Text> {
+    if (not Principal.equal(msg.caller, adminPrincipal)) {
+      return #err("Unauthorized: Only current admin can transfer admin rights");
+    };
+    adminPrincipal := newAdmin;
+    Debug.print("Admin transferred to: " # Principal.toText(newAdmin));
+    #ok(())
+  };
+
+  /// Update fee collector (admin only)
+  public shared(msg) func setFeeCollector(newFeeCollector: Principal) : async Result.Result<(), Text> {
+    if (not Principal.equal(msg.caller, adminPrincipal)) {
+      return #err("Unauthorized: Admin only");
+    };
+    feeCollectorPrincipal := newFeeCollector;
+    Debug.print("Fee collector updated to: " # Principal.toText(newFeeCollector));
+    #ok(())
+  };
+
+  /// Get current admin (query)
+  public query func getAdmin() : async Principal {
+    adminPrincipal
   };
 
   /// Get system stats

@@ -558,4 +558,59 @@ module {
       }
     )
   };
+
+  // ===========================
+  // UPGRADE HELPERS
+  // ===========================
+
+  /// Serialize state for upgrade
+  public func serializeState(state: State) : {
+    nextIntentId: Nat;
+    intents: [(Nat, Intent)];
+    events: [Event];
+    escrowAccounts: [((Principal, Text), Types.EscrowAccount)];
+  } {
+    {
+      nextIntentId = state.nextIntentId;
+      intents = Iter.toArray(state.intents.entries());
+      events = Buffer.toArray(state.events);
+      escrowAccounts = Iter.toArray(state.escrow.accounts.entries());
+    }
+  };
+
+  /// Deserialize state after upgrade
+  public func deserializeState(
+    config: ProtocolConfig,
+    tecdsaConfig: TECDSA.Config,
+    verificationConfig: Verification.Config,
+    supportedChains: [Nat],
+    serialized: {
+      nextIntentId: Nat;
+      intents: [(Nat, Intent)];
+      events: [Event];
+      escrowAccounts: [((Principal, Text), Types.EscrowAccount)];
+    }
+  ) : State {
+    let state = init(config, tecdsaConfig, verificationConfig, supportedChains);
+
+    // Restore intents
+    for ((id, intent) in serialized.intents.vals()) {
+      state.intents.put(id, intent);
+    };
+
+    // Restore next ID
+    state.nextIntentId := serialized.nextIntentId;
+
+    // Restore events
+    for (event in serialized.events.vals()) {
+      state.events.add(event);
+    };
+
+    // Restore escrow accounts
+    for ((key, account) in serialized.escrowAccounts.vals()) {
+      state.escrow.accounts.put(key, account);
+    };
+
+    state
+  };
 }

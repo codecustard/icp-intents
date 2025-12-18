@@ -84,14 +84,20 @@ module {
     currentTime >= timestamp
   };
 
-  /// Validates token identifier (ICP or principal format)
+  /// Validates token identifier (native, ICP, or principal format)
   public func isValidTokenId(token: Text) : Bool {
-    if (token == "ICP") return true;
+    if (token == "native" or token == "ICP") return true;
 
-    // Try to parse as principal
+    // Try to parse as principal (for ICRC-1 tokens or ERC20 addresses)
     switch (parsePrincipal(token)) {
       case (?_) true;
-      case null false;
+      case null {
+        // Also accept Ethereum-style hex addresses (0x...)
+        if (Text.startsWith(token, #text "0x")) {
+          return true;
+        };
+        false
+      };
     }
   };
 
