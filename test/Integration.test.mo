@@ -26,6 +26,8 @@ module {
       max_protocol_fee_bps = 100;
       min_intent_amount = 1000;
       max_intent_lifetime = 7 * 24 * 60 * 60 * 1_000_000_000;
+      max_active_intents = 100; // Small limit for testing
+      max_events = 10; // Small buffer for testing
       admin = Principal.fromText("aaaaa-aa");
       fee_collector = Principal.fromText("aaaaa-aa");
       paused = false;

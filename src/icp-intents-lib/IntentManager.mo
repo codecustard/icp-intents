@@ -71,6 +71,30 @@ module {
     }
   };
 
+  /// Helper: Add event to buffer (with cap to prevent unbounded growth)
+  func addEvent(state: State, event: Event) {
+    let maxEvents = state.config.max_events;
+
+    // If buffer is at capacity, remove oldest event (circular buffer)
+    if (state.events.size() >= maxEvents) {
+      ignore state.events.remove(0); // Remove first (oldest) event
+    };
+
+    state.events.add(event);
+  };
+
+  /// Helper: Count active intents (Open, Quoted, Locked)
+  func countActiveIntents(state: State) : Nat {
+    var count = 0;
+    for (intent in state.intents.vals()) {
+      switch (intent.status) {
+        case (#Open or #Quoted or #Locked) { count += 1 };
+        case _ {}; // Fulfilled, Refunded, Cancelled don't count
+      };
+    };
+    count
+  };
+
   /// Post a new intent
   public func postIntent(
     state: State,
@@ -81,6 +105,12 @@ module {
     // Validation
     if (state.config.paused) {
       return #err(#InternalError("System is paused"));
+    };
+
+    // Check if we've hit max active intents (prevent memory exhaustion)
+    let activeCount = countActiveIntents(state);
+    if (activeCount >= state.config.max_active_intents) {
+      return #err(#InternalError("Maximum active intents reached. Please try again later."));
     };
 
     if (not Utils.isValidAmount(request.source_amount, state.config.min_intent_amount)) {
@@ -143,7 +173,7 @@ module {
       timestamp = currentTime;
       event_type = #IntentPosted({ intent_id = intentId; user = caller });
     };
-    state.events.add(event);
+    addEvent(state, event);
 
     #ok(intentId)
   };
@@ -212,7 +242,7 @@ module {
         amount = request.output_amount;
       });
     };
-    state.events.add(event);
+    addEvent(state, event);
 
     #ok(())
   };
@@ -302,7 +332,7 @@ module {
       timestamp = currentTime;
       event_type = #IntentLocked({ intent_id = intentId; quote_index = quoteIndex });
     };
-    state.events.add(event);
+    addEvent(state, event);
 
     #ok(generatedAddress)
   };
@@ -400,7 +430,7 @@ module {
             released_amount = solverAmount;
           });
         };
-        state.events.add(event);
+        addEvent(state, event);
 
         #ok(())
       };
@@ -446,7 +476,7 @@ module {
       timestamp = currentTime;
       event_type = #IntentCancelled({ intent_id = intentId });
     };
-    state.events.add(event);
+    addEvent(state, event);
 
     #ok(())
   };
@@ -493,7 +523,7 @@ module {
       timestamp = currentTime;
       event_type = #IntentRefunded({ intent_id = intentId; reason = "Deadline expired" });
     };
-    state.events.add(event);
+    addEvent(state, event);
 
     #ok(())
   };
@@ -603,7 +633,7 @@ module {
 
     // Restore events
     for (event in serialized.events.vals()) {
-      state.events.add(event);
+      addEvent(state, event);
     };
 
     // Restore escrow accounts

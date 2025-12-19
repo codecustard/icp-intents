@@ -173,6 +173,8 @@ module {
     max_protocol_fee_bps: Nat;      /// Maximum allowed (100 = 1%)
     min_intent_amount: Nat;         /// Anti-spam minimum
     max_intent_lifetime: Int;       /// Max deadline duration (nanoseconds)
+    max_active_intents: Nat;        /// Maximum concurrent active intents (prevent memory exhaustion)
+    max_events: Nat;                /// Maximum events to keep in buffer (circular buffer)
     admin: Principal;
     fee_collector: Principal;
     paused: Bool;
