@@ -1,5 +1,106 @@
 # ICP Intents - Architecture & Escrow Design
 
+## Library Purpose and Deployment Model
+
+### Transfer-Agnostic Library Design
+
+**This library is NOT a complete canister - it's a toolkit for building intent pool canisters.**
+
+**What this library provides:**
+- Intent lifecycle management (create, quote, confirm, cancel, refund)
+- Escrow state tracking (deposit, lock, unlock, release accounting)
+- tECDSA address generation for unique deposit addresses
+- Cross-chain verification via EVM RPC
+- Event logging and bounded data structures
+- Type definitions and utilities
+
+**What you must add (integrator responsibility):**
+- Actual token transfers (ICRC-1, ICP Ledger, custom, etc.)
+- Ledger integration
+- Fee collection transfers
+- Your specific business logic
+
+This design provides **maximum flexibility** and **composability**:
+- ✅ Works with any token standard (ICRC-1, ICP Ledger, future standards)
+- ✅ Supports NFTs, custom assets, anything
+- ✅ No lock-in to specific ledgers
+- ✅ Integrators choose their own security model
+- ✅ Can be used in DEXes, bridges, or other applications
+
+### Multi-Pool Deployment Model
+
+**This library enables permissionless, decentralized intent markets.**
+
+Unlike centralized DEX designs, anyone can deploy their own intent pool canister:
+
+```
+┌──────────────────────────────────────────────────────┐
+│         Decentralized Intent Market Ecosystem        │
+├──────────────────────────────────────────────────────┤
+│                                                      │
+│  Pool A (0.3% fee)    Pool B (0.25% fee)   Pool C   │
+│  ┌──────────────┐     ┌──────────────┐   ┌────────┐ │
+│  │ 50 intents   │     │ 200 intents  │   │ Custom │ │
+│  │ ICP/ETH only │     │ Multi-token  │   │ NFTs   │ │
+│  └──────────────┘     └──────────────┘   └────────┘ │
+│         ▲                    ▲                ▲      │
+│         └────────────────────┼────────────────┘      │
+│                              │                       │
+│                       ┌──────▼──────┐                │
+│                       │   Solvers   │                │
+│                       │ Scan all    │                │
+│                       │   pools     │                │
+│                       └─────────────┘                │
+└──────────────────────────────────────────────────────┘
+```
+
+**Benefits of multi-pool architecture:**
+- 🏛️ **Decentralized** - No single point of control or failure
+- 💰 **Competition** - Pools compete on fees, driving better prices
+- 🚀 **Innovation** - Pools can differentiate (custom features, tokens, etc.)
+- 🔓 **Permissionless** - Anyone can deploy without approval
+- 🛡️ **Censorship Resistant** - No central authority can block users
+- 🌐 **Market Discovery** - Users and solvers choose best pools
+
+**Example pool specializations:**
+- **General Pool** - Supports many tokens, standard fees
+- **Low-Fee Pool** - Competitive pricing, high volume
+- **Specialized Pool** - Only specific token pairs (e.g., stablecoins)
+- **NFT Pool** - Cross-chain NFT swaps
+- **Enterprise Pool** - KYC/AML compliance, institution-focused
+
+**Solver workflow:**
+```motoko
+// Solvers scan multiple pools to find profitable intents
+for (poolCanister in allKnownPools) {
+  let intents = await poolCanister.getIntents(0, 100);
+  for (intent in intents) {
+    if (isProfitable(intent)) {
+      await poolCanister.submitQuote(intent.id, myQuote);
+    };
+  };
+};
+```
+
+**Optional: Pool Registry**
+
+You can optionally create a registry canister for pool discovery:
+
+```motoko
+// PoolRegistry.mo
+persistent actor PoolRegistry {
+  var pools = HashMap.HashMap<Principal, PoolMetadata>(10, Principal.equal, Principal.hash);
+
+  public func registerPool(metadata: PoolMetadata) : async () {
+    pools.put(msg.caller, metadata);
+  };
+
+  public query func getAllPools() : async [(Principal, PoolMetadata)] {
+    Iter.toArray(pools.entries())
+  };
+}
+```
+
 ## Universal Chain Asset Design
 
 The library now uses a **fully extensible** design that works for ANY blockchain combination.
@@ -305,6 +406,63 @@ let amountToSolver = depositedAmount - gasEstimate;
 
 That's it! The ChainAsset design makes it fully extensible.
 
+## Integration Requirements
+
+### Token Transfers (Integrator Responsibility)
+
+The library tracks escrow state but does NOT perform token transfers. You must implement:
+
+**For ICP/ICRC-1 deposits:**
+```motoko
+public shared(msg) func depositEscrow(token: Text, amount: Nat) : async Result<(), Text> {
+  // 1. Call ICRC-1 ledger to transfer tokens FROM user TO canister
+  let ledger = actor ("...") : ICRC1.Self;
+  let transferResult = await ledger.icrc1_transfer({
+    from_subaccount = null;
+    to = { owner = Principal.fromActor(this); subaccount = null };
+    amount = amount;
+    // ... other fields
+  });
+
+  // 2. Only if transfer succeeds, credit escrow
+  switch (transferResult) {
+    case (#Ok(_)) {
+      Escrow.deposit(state.escrow, msg.caller, token, amount)
+    };
+    case (#Err(e)) { #err("Transfer failed") };
+  };
+}
+```
+
+**For releasing tokens to solver:**
+```motoko
+// After verification succeeds in claimFulfillment
+public func releaseFunds(solver: Principal, token: Text, amount: Nat) : async () {
+  // 1. Library unlocks escrow state
+  ignore Escrow.unlock(state.escrow, user, token, amount);
+  ignore Escrow.release(state.escrow, user, token, amount);
+
+  // 2. YOU perform actual transfer from canister to solver
+  let ledger = actor ("...") : ICRC1.Self;
+  await ledger.icrc1_transfer({
+    from_subaccount = null;
+    to = { owner = solver; subaccount = null };
+    amount = amount;
+    // ...
+  });
+}
+```
+
+**Key principle:**
+- Library = State machine (tracking who owns what)
+- Integrator = Execution layer (actual transfers)
+
+This separation allows:
+- Testing library without real tokens
+- Swapping ledger implementations
+- Supporting multiple token standards
+- Custom transfer logic (batching, retries, etc.)
+
 ## Summary
 
 | Aspect | ICP | EVM | Other Chains |
@@ -313,5 +471,12 @@ That's it! The ChainAsset design makes it fully extensible.
 | Lock Mechanism | HashMap + lock/unlock | tECDSA derivation | Chain-specific |
 | Verification | Balance check | EVM RPC | Chain-specific RPC |
 | Release | Transfer from pool | Sign + broadcast tx | Chain-specific |
+| **Transfer Logic** | **Integrator implements** | **Integrator implements** | **Integrator implements** |
 
-**Result:** Universal, extensible intent system that works for ANY blockchain! 🚀
+**Result:**
+- ✅ Universal, extensible intent system that works for ANY blockchain
+- ✅ Transfer-agnostic design for maximum flexibility
+- ✅ Multi-pool architecture for decentralization
+- ✅ Composable library, not a monolithic canister
+
+🚀
