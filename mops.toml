@@ -7,7 +7,7 @@ keywords = [ "intents", "cross-chain", "chain-fusion", "defi" ]
 license = "MIT"
 
 [dependencies]
-base = "0.11.1"
+base = "0.16.0"
 map = "9.0.1"
 sha3 = "0.1.1"
 

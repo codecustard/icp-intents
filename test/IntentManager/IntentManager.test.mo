@@ -4,9 +4,9 @@
 import {test; suite} "mo:test/async";
 import Principal "mo:base/Principal";
 import Time "mo:base/Time";
-import IntentManager "../src/icp-intents-lib/IntentManager";
-import Types "../src/icp-intents-lib/Types";
-import Escrow "../src/icp-intents-lib/Escrow";
+import IntentManager "../../src/icp-intents-lib/IntentManager";
+import Types "../../src/icp-intents-lib/Types";
+import Escrow "../../src/icp-intents-lib/Escrow";
 
 // Test helpers
 func createTestConfig() : Types.ProtocolConfig {
