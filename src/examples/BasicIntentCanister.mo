@@ -18,6 +18,7 @@ import Timer "mo:base/Timer";
 import Nat "mo:base/Nat";
 import Debug "mo:base/Debug";
 import Result "mo:base/Result";
+import Array "mo:base/Array";
 import ExperimentalCycles "mo:base/ExperimentalCycles";
 
 // Import the library modules
@@ -25,6 +26,9 @@ import Types "../icp-intents-lib/Types";
 import IntentManager "../icp-intents-lib/IntentManager";
 import Escrow "../icp-intents-lib/Escrow";
 import Utils "../icp-intents-lib/Utils";
+
+// Import ICRC-1/ICRC-2 token types
+import ICRC2 "mo:icrc2-types";
 
 shared(init_msg) persistent actor class BasicIntentCanister() = self {
   type Intent = Types.Intent;
@@ -45,6 +49,21 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
   // Admin principal - set on first deployment, persists across upgrades
   var adminPrincipal : Principal = init_msg.caller;
   var feeCollectorPrincipal : Principal = init_msg.caller;
+
+  // Token ledger configuration
+  // Maps token identifiers to their ICRC-1 ledger canister IDs
+  // Example: "ICP" -> ryjl3-tyaaa-aaaaa-aaaba-cai
+  var tokenLedgers : [(Text, Principal)] = [];
+
+  // Helper function to get ledger for a token
+  func getLedger(token: Text) : ?ICRC2.Service {
+    for ((tokenId, ledgerPrincipal) in tokenLedgers.vals()) {
+      if (tokenId == token) {
+        return ?(actor (Principal.toText(ledgerPrincipal)) : ICRC2.Service);
+      };
+    };
+    null
+  };
 
   // Protocol configuration (reconstructed on each upgrade)
   let protocolConfig : Types.ProtocolConfig = {
@@ -165,12 +184,99 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
   };
 
   /// Claim fulfillment for a locked intent
-  /// Verifies the deposit and releases escrow
+  /// Verifies the deposit, releases escrow, and pays solver
   public shared func claimFulfillment(
     intentId: Nat,
     txHashHint: ?Text
   ) : async IntentResult<()> {
-    await IntentManager.claimFulfillment(intentState, intentId, txHashHint, Time.now())
+    // First verify fulfillment through library
+    let verifyResult = await IntentManager.claimFulfillment(intentState, intentId, txHashHint, Time.now());
+
+    switch (verifyResult) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(())) {
+        // Verification succeeded, now handle payments
+        let intent = switch (IntentManager.getIntent(intentState, intentId)) {
+          case null { return #err(#NotFound) };
+          case (?i) { i };
+        };
+
+        // Get token from source ChainAsset
+        let sourceToken = intent.source.token;
+
+        // Calculate amounts
+        let solverAmount = intent.source_amount;
+        let protocolFee = Utils.calculateFee(intent.source_amount, protocolConfig.default_protocol_fee_bps);
+        let totalLocked = solverAmount + protocolFee;
+
+        // Get solver principal from selected quote
+        let solver = switch (intent.selected_quote) {
+          case null { return #err(#InvalidStatus("No quote selected")) };
+          case (?quote) { quote.solver };
+        };
+
+        // Release escrow (unlock and release)
+        ignore Escrow.unlock(intentState.escrow, intent.user, sourceToken, totalLocked);
+        ignore Escrow.release(intentState.escrow, intent.user, sourceToken, totalLocked);
+
+        // Get ledger for token
+        let ledger = switch (getLedger(sourceToken)) {
+          case null { return #err(#InvalidToken) };
+          case (?l) { l };
+        };
+
+        // Transfer to solver
+        let solverTransferArgs : ICRC2.TransferArgs = {
+          from_subaccount = null;
+          to = {
+            owner = solver;
+            subaccount = null;
+          };
+          amount = solverAmount;
+          fee = null;
+          memo = null;
+          created_at_time = null;
+        };
+
+        let solverTransferResult = await ledger.icrc1_transfer(solverTransferArgs);
+
+        switch (solverTransferResult) {
+          case (#Err(_)) {
+            // Transfer to solver failed - this is critical
+            Debug.print("CRITICAL: Failed to pay solver for intent " # Nat.toText(intentId));
+            return #err(#InternalError("Failed to transfer tokens to solver"));
+          };
+          case (#Ok(_)) {};
+        };
+
+        // Transfer fee to fee collector (if fee > 0)
+        if (protocolFee > 0) {
+          let feeTransferArgs : ICRC2.TransferArgs = {
+            from_subaccount = null;
+            to = {
+              owner = feeCollectorPrincipal;
+              subaccount = null;
+            };
+            amount = protocolFee;
+            fee = null;
+            memo = null;
+            created_at_time = null;
+          };
+
+          let feeTransferResult = await ledger.icrc1_transfer(feeTransferArgs);
+
+          switch (feeTransferResult) {
+            case (#Err(_)) {
+              // Fee transfer failed - log but don't fail the whole operation
+              Debug.print("WARNING: Failed to collect protocol fee for intent " # Nat.toText(intentId));
+            };
+            case (#Ok(_)) {};
+          };
+        };
+
+        #ok(())
+      };
+    };
   };
 
   /// Get intents where solver has submitted quotes
@@ -183,23 +289,97 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
   // ===========================
 
   /// Deposit funds into escrow
-  /// In production, integrate with ICP Ledger or ICRC-1 transfers
+  /// Uses ICRC-2 transferFrom to pull tokens from user (requires prior approval)
   public shared(msg) func depositEscrow(token: Text, amount: Nat) : async IntentResult<()> {
-    // TODO: Add actual token transfer logic
-    // For ICP: await Ledger.transfer(...)
-    // For ICRC-1: await ICRC1.icrc1_transfer(...)
+    // Get the ledger for this token
+    let ledger = switch (getLedger(token)) {
+      case null { return #err(#InvalidToken) };
+      case (?l) { l };
+    };
 
-    Escrow.deposit(intentState.escrow, msg.caller, token, amount)
+    // Use ICRC-2 transferFrom to pull tokens from user to canister
+    // User must approve the canister first
+    let transferFromArgs : ICRC2.TransferFromArgs = {
+      spender_subaccount = null;
+      from = {
+        owner = msg.caller;
+        subaccount = null;
+      };
+      to = {
+        owner = Principal.fromActor(self);
+        subaccount = null;
+      };
+      amount = amount;
+      fee = null;  // Use default fee
+      memo = null;
+      created_at_time = null;
+    };
+
+    let transferResult = await ledger.icrc2_transfer_from(transferFromArgs);
+
+    switch (transferResult) {
+      case (#Ok(_blockIndex)) {
+        // Transfer succeeded, credit user's escrow balance
+        Escrow.deposit(intentState.escrow, msg.caller, token, amount)
+      };
+      case (#Err(#InsufficientFunds { balance = _ })) {
+        #err(#InsufficientBalance)
+      };
+      case (#Err(#InsufficientAllowance { allowance = _ })) {
+        #err(#InternalError("Insufficient allowance - please approve tokens first"))
+      };
+      case (#Err(#BadFee { expected_fee = _ })) {
+        #err(#InternalError("Bad fee"))
+      };
+      case (#Err(_)) {
+        #err(#InternalError("Transfer failed"))
+      };
+    };
   };
 
   /// Withdraw available funds from escrow
+  /// Deducts from escrow, then transfers tokens back to user
   public shared(msg) func withdrawEscrow(token: Text, amount: Nat) : async IntentResult<Nat> {
-    let result = Escrow.withdraw(intentState.escrow, msg.caller, token, amount);
+    // First withdraw from escrow (updates state)
+    let withdrawResult = Escrow.withdraw(intentState.escrow, msg.caller, token, amount);
 
-    // TODO: Transfer funds back to user
-    // For ICP: await Ledger.transfer(to: msg.caller, amount: amount)
+    switch (withdrawResult) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(withdrawnAmount)) {
+        // Get the ledger for this token
+        let ledger = switch (getLedger(token)) {
+          case null { return #err(#InvalidToken) };
+          case (?l) { l };
+        };
 
-    result
+        // Transfer tokens from canister back to user
+        let transferArgs : ICRC2.TransferArgs = {
+          from_subaccount = null;
+          to = {
+            owner = msg.caller;
+            subaccount = null;
+          };
+          amount = withdrawnAmount;
+          fee = null;  // Use default fee
+          memo = null;
+          created_at_time = null;
+        };
+
+        let transferResult = await ledger.icrc1_transfer(transferArgs);
+
+        switch (transferResult) {
+          case (#Ok(_blockIndex)) {
+            // Transfer succeeded
+            #ok(withdrawnAmount)
+          };
+          case (#Err(_)) {
+            // Transfer failed - credit the amount back to escrow
+            ignore Escrow.deposit(intentState.escrow, msg.caller, token, withdrawnAmount);
+            #err(#InternalError("Transfer failed"))
+          };
+        };
+      };
+    };
   };
 
   /// Get escrow balance
@@ -273,6 +453,50 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
     feeCollectorPrincipal := newFeeCollector;
     Debug.print("Fee collector updated to: " # Principal.toText(newFeeCollector));
     #ok(())
+  };
+
+  /// Register a token and its ICRC-1 ledger canister (admin only)
+  /// Example: registerToken("ICP", "ryjl3-tyaaa-aaaaa-aaaba-cai")
+  public shared(msg) func registerToken(
+    tokenId: Text,
+    ledgerCanisterId: Principal
+  ) : async Result.Result<(), Text> {
+    if (not Principal.equal(msg.caller, adminPrincipal)) {
+      return #err("Unauthorized: Admin only");
+    };
+
+    // Check if token already registered, update if so
+    var found = false;
+    let updatedLedgers = Array.map<(Text, Principal), (Text, Principal)>(
+      tokenLedgers,
+      func((id, principal)) {
+        if (id == tokenId) {
+          found := true;
+          (tokenId, ledgerCanisterId)
+        } else {
+          (id, principal)
+        }
+      }
+    );
+
+    if (found) {
+      tokenLedgers := updatedLedgers;
+      Debug.print("Updated token " # tokenId # " -> " # Principal.toText(ledgerCanisterId));
+    } else {
+      // Add new token
+      tokenLedgers := Array.append(
+        tokenLedgers,
+        [(tokenId, ledgerCanisterId)]
+      );
+      Debug.print("Registered token " # tokenId # " -> " # Principal.toText(ledgerCanisterId));
+    };
+
+    #ok(())
+  };
+
+  /// Get registered tokens (query)
+  public query func getRegisteredTokens() : async [(Text, Principal)] {
+    tokenLedgers
   };
 
   /// Get current admin (query)

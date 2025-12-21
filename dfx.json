@@ -9,6 +9,15 @@
       "main": "src/examples/BasicIntentCanister.mo",
       "type": "motoko",
       "wasm_memory_persistence": "keep"
+    },
+    "MockICRC1Ledger": {
+      "main": "src/examples/MockICRC1Ledger.mo",
+      "type": "motoko",
+      "wasm_memory_persistence": "keep"
+    },
+    "evm_rpc": {
+      "type": "pull",
+      "id": "7hfb6-caaaa-aaaar-qadga-cai"
     }
   },
   "defaults": {

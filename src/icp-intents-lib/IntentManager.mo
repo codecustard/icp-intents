@@ -341,7 +341,7 @@ module {
   public func claimFulfillment(
     state: State,
     intentId: Nat,
-    _txHashHint: ?Text,
+    txHashHint: ?Text,
     currentTime: Time.Time
   ) : async IntentResult<()> {
     // Get intent
@@ -381,6 +381,7 @@ module {
       quote.output_amount,
       intent.destination.token,
       chainId,
+      txHashHint,
       null  // fromBlock - could optimize by storing block number
     );
 
