@@ -19,6 +19,7 @@ import Nat "mo:base/Nat";
 import Debug "mo:base/Debug";
 import Result "mo:base/Result";
 import Array "mo:base/Array";
+import Option "mo:base/Option";
 import ExperimentalCycles "mo:base/ExperimentalCycles";
 
 // Import the library modules
@@ -26,6 +27,7 @@ import Types "../icp-intents-lib/Types";
 import IntentManager "../icp-intents-lib/IntentManager";
 import Escrow "../icp-intents-lib/Escrow";
 import Utils "../icp-intents-lib/Utils";
+import Verification "../icp-intents-lib/Verification";
 
 // Import ICRC-1/ICRC-2 token types
 import ICRC2 "mo:icrc2-types";
@@ -189,18 +191,88 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
     intentId: Nat,
     txHashHint: ?Text
   ) : async IntentResult<()> {
-    // First verify fulfillment through library
-    let verifyResult = await IntentManager.claimFulfillment(intentState, intentId, txHashHint, Time.now());
+    let currentTime = Time.now();
 
-    switch (verifyResult) {
+    // STEP 1: Prepare verification (pure function)
+    let verificationRequest = switch (IntentManager.prepareClaimFulfillment(intentState, intentId, txHashHint)) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(req)) { req };
+    };
+
+    // STEP 2: Get intent for custom RPC URLs
+    let intent = switch (IntentManager.getIntent(intentState, intentId)) {
+      case null { return #err(#NotFound) };
+      case (?i) { i };
+    };
+
+    // STEP 3: Make EVM RPC calls from actor (with cycles)
+    let evmRpc = Verification.getEVMRPC(verificationConfig.evm_rpc_canister_id);
+    let rpcServices = Verification.chainIdToRpcServices(verificationRequest.chainId, intent.custom_rpc_urls);
+
+    // Fetch receipt (for success status and destination address)
+    ExperimentalCycles.add<system>(10_000_000_000); // 10B cycles
+    let rpcResponse = await evmRpc.eth_getTransactionReceipt(
+      rpcServices,
+      null,
+      verificationRequest.txHash
+    );
+
+    // Fetch transaction using multi_request (to get value field)
+    let jsonRpcRequest = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionByHash\",\"params\":[\"" # verificationRequest.txHash # "\"],\"id\":1}";
+
+    ExperimentalCycles.add<system>(10_000_000_000); // 10B cycles
+    let txResponse = await evmRpc.multi_request(
+      rpcServices,
+      null,  // Use default RPC config
+      jsonRpcRequest
+    );
+
+    // STEP 4: Extract from multi-provider responses
+    let receipt = Verification.extractReceipt(rpcResponse);
+
+    // Parse JSON response to get value
+    let txValue = Verification.parseTransactionValue(txResponse);
+
+    // If parsing failed, include JSON in error for debugging
+    if (Option.isNull(txValue)) {
+      let jsonStr = Verification.extractJsonString(txResponse);
+      let errorMsg = switch (jsonStr) {
+        case (?json) { "Could not parse transaction value. JSON: " # json };
+        case null {
+          // No JSON means we got an error response
+          let rpcErrorMsg = switch (txResponse) {
+            case (#Consistent(#Err(err))) { "EVM RPC error: " # debug_show(err) };
+            case (#Inconsistent(results)) { "EVM RPC inconsistent responses: " # debug_show(results) };
+            case _ { "Could not parse transaction value. No JSON response received." };
+          };
+          rpcErrorMsg
+        };
+      };
+      return #err(#VerificationFailed(errorMsg));
+    };
+
+    // STEP 5: Validate receipt AND transaction value (pure function)
+    let verificationResult = Verification.validateTransactionReceipt(
+      receipt,
+      txValue,
+      verificationRequest.depositAddress,
+      verificationRequest.expectedAmount,
+      verificationRequest.txHash
+    );
+
+    // STEP 6: Finalize fulfillment (pure function - updates state)
+    let finalizeResult = IntentManager.finalizeFulfillment(
+      intentState,
+      intentId,
+      verificationResult,
+      verificationRequest.txHash,
+      currentTime
+    );
+
+    switch (finalizeResult) {
       case (#err(e)) { return #err(e) };
       case (#ok(())) {
-        // Verification succeeded, now handle payments
-        let intent = switch (IntentManager.getIntent(intentState, intentId)) {
-          case null { return #err(#NotFound) };
-          case (?i) { i };
-        };
-
+        // STEP 7: Handle token transfers (actor responsibility)
         // Get token from source ChainAsset
         let sourceToken = intent.source.token;
 

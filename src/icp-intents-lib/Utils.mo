@@ -84,33 +84,10 @@ module {
     currentTime >= timestamp
   };
 
-  /// Validates token identifier (native, ICP, or principal format)
+  /// Validates token identifier (just checks non-empty)
+  /// Real validation happens when looking up the ledger
   public func isValidTokenId(token: Text) : Bool {
-    if (token == "native" or token == "ICP") return true;
-
-    // Try to parse as principal (for ICRC-1 tokens or ERC20 addresses)
-    switch (parsePrincipal(token)) {
-      case (?_) true;
-      case null {
-        // Also accept Ethereum-style hex addresses (0x...)
-        if (Text.startsWith(token, #text "0x")) {
-          return true;
-        };
-        false
-      };
-    }
-  };
-
-  /// Parse text as principal (helper)
-  /// Returns null if parsing fails
-  public func parsePrincipal(text: Text) : ?Principal {
-    // Principal.fromText can trap, so we return null on failure
-    // In production, caller should handle the ? type appropriately
-    // Note: Motoko doesn't have try/catch for Principal.fromText
-    // This is a simplified version
-    if (Text.size(text) == 0) return null;
-    // For now, assume valid - in production use Principal.fromText with care
-    ?Principal.fromText(text)
+    Text.size(token) > 0
   };
 
   /// Validates amount is non-zero and reasonable

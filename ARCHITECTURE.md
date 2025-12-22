@@ -479,4 +479,98 @@ This separation allows:
 - ✅ Multi-pool architecture for decentralization
 - ✅ Composable library, not a monolithic canister
 
+## Recent Architectural Improvements
+
+### Separation of Async Calls (Dec 2025)
+
+**Problem:** Initial design had async calls embedded in module functions, causing cycles propagation issues.
+
+**Solution:** Restructured to separate pure business logic from integration layer:
+
+```motoko
+// ❌ OLD: Module makes async calls
+// Verification.mo
+public func verifyTransaction(...) : async VerificationResult {
+  Cycles.add(1B);  // Doesn't work from module!
+  let receipt = await evmRpc.getReceipt(...);
+  validateReceipt(receipt);
+}
+
+// ✅ NEW: Pure functions, actor orchestrates
+// Verification.mo (pure functions)
+public func prepareVerification(...) : VerificationRequest {
+  // Returns what actor needs to fetch
+}
+
+public func validateReceipt(receipt, ...) : VerificationResult {
+  // Pure validation logic
+}
+
+// BasicIntentCanister.mo (actor orchestrates)
+let params = IntentManager.prepareClaimFulfillment(...);
+ExperimentalCycles.add<system>(10B);  // Works from actor!
+let receipt = await evmRpc.getReceipt(...);
+let result = Verification.validateReceipt(receipt, ...);
+IntentManager.finalizeFulfillment(state, result, ...);
+```
+
+**Benefits:**
+- ✅ Cycles attach correctly (actor level only)
+- ✅ Better testability (pure functions)
+- ✅ Clear separation of concerns
+- ✅ Easier to mock external calls
+
+### Candid Type Field Mismatch Bug Fix
+
+**Problem:** EVM RPC returns a field named `"type"`, but Motoko can't use reserved keywords as field names.
+
+**Symptom:** Deserialization failed silently, returning `null` for entire receipt.
+
+**Original (broken):**
+```motoko
+type TransactionReceipt_ = {
+  to: ?Text;
+  status: ?Nat;
+  // ...
+  txType: Text;  // ❌ Field name doesn't match EVM RPC!
+  // ...
+};
+```
+
+**Fixed:**
+```motoko
+type TransactionReceipt_ = {
+  to: ?Text;
+  status: ?Nat;
+  // ...
+  // Note: "type" field omitted - Candid ignores extra fields
+  transactionIndex: Nat;
+  // ...
+};
+```
+
+**Why this works:**
+- Candid's lenient deserialization allows subset matching
+- Extra fields in response are ignored
+- Required fields must match exactly
+- Missing optional fields default to null
+
+**Lesson:** When interfacing with external canisters, field names must match EXACTLY or be omitted.
+
+### Testing Infrastructure
+
+Created comprehensive test scripts:
+
+**Automated Test** (`scripts/test-intent-automated.sh`):
+- Fully automated, no manual steps
+- Uses pre-existing Sepolia transaction
+- Validates complete flow in <1 minute
+
+**Manual Test** (`scripts/test-intent-flow.sh`):
+- Guides through real ETH transaction
+- Interactive, educational
+- Tests end-to-end with fresh transaction
+
+See `scripts/README.md` for usage.
+
 🚀

@@ -1,29 +1,30 @@
 /// Cross-chain verification module for EVM chains.
-/// Uses the official EVM RPC canister for multi-provider consensus.
+/// Pure validation logic - does NOT make async calls.
+/// The caller (actor) is responsible for fetching transaction receipts.
 ///
-/// Supports:
-/// - Native ETH verification (eth_getBalance)
-/// - ERC20 token verification (eth_getLogs for Transfer events)
-/// - Extensible to custom chains via user-provided RPC URLs
+/// Architecture:
+/// - Actor fetches data from EVM RPC (with proper cycles)
+/// - This module validates the fetched data (pure functions)
 ///
 /// Example usage:
 /// ```motoko
 /// import Verification "mo:icp-intents/Verification";
 ///
-/// let result = await Verification.verifyDeposit(
-///   config,
-///   address,
-///   expectedAmount,
-///   tokenAddress,
-///   chainId
-/// );
+/// // Actor makes RPC call
+/// let receipt = await evmRpc.eth_getTransactionReceipt(...);
+///
+/// // Module validates receipt
+/// let result = Verification.validateReceipt(receipt, expectedAddress, expectedAmount);
 /// ```
 
 import Principal "mo:base/Principal";
 import Text "mo:base/Text";
 import Nat "mo:base/Nat";
+import Nat16 "mo:base/Nat16";
 import Nat64 "mo:base/Nat64";
-import Error "mo:base/Error";
+import Int64 "mo:base/Int64";
+import Array "mo:base/Array";
+import Iter "mo:base/Iter";
 import Types "../icp-intents-lib/Types";
 import Utils "../icp-intents-lib/Utils";
 
@@ -38,14 +39,36 @@ module {
     min_confirmations: Nat;          // Minimum block confirmations
   };
 
+  /// Re-export RPC types for actors to use
+  public type RpcServices = RpcServices_;
+  public type RpcConfig = RpcConfig_;
+  public type TransactionReceipt = TransactionReceipt_;
+  public type Transaction = Transaction_;
+  public type MultiGetTransactionReceiptResult = MultiGetTransactionReceiptResult_;
+  public type MultiGetTransactionResult = MultiGetTransactionResult_;
+  public type GetTransactionReceiptResult = GetTransactionReceiptResult_;
+  public type GetTransactionResult = GetTransactionResult_;
+  public type RpcError = RpcError_;
+
   /// EVM RPC canister interface (official)
-  type EVMRPCCanister = actor {
-    eth_getTransactionReceipt: (RpcServices, ?RpcConfig, Text) -> async MultiGetTransactionReceiptResult;
+  public type EVMRPCCanister = actor {
+    eth_getTransactionReceipt: (RpcServices_, ?RpcConfig_, Text) -> async MultiGetTransactionReceiptResult_;
     eth_getLogs: (GetLogsRequest) -> async GetLogsResult;
+    multi_request: (RpcServices_, ?RpcConfig_, Text) -> async MultiJsonRequestResult;
+  };
+
+  type MultiJsonRequestResult = {
+    #Consistent: JsonRequestResult;
+    #Inconsistent: [(RpcService, JsonRequestResult)];
+  };
+
+  type JsonRequestResult = {
+    #Ok: Text;
+    #Err: RpcError_;
   };
 
   /// RPC request types from official EVM RPC canister
-  type RpcServices = {
+  type RpcServices_ = {
     #Custom: { chainId: Nat64; services: [RpcApi] };
     #EthSepolia: ?[EthSepoliaService];
     #EthMainnet: ?[EthMainnetService];
@@ -54,7 +77,7 @@ module {
     #OptimismMainnet: ?[L2MainnetService];
   };
 
-  type RpcConfig = {
+  type RpcConfig_ = {
     responseSizeEstimate: ?Nat64;
     responseConsensus: ?ConsensusStrategy;
   };
@@ -70,9 +93,14 @@ module {
   type EthMainnetService = { #Alchemy; #BlockPi; #Cloudflare; #PublicNode; #Ankr };
   type L2MainnetService = { #Alchemy; #BlockPi; #PublicNode; #Ankr };
 
-  type MultiGetTransactionReceiptResult = {
-    #Consistent: GetTransactionReceiptResult;
-    #Inconsistent: [(RpcService, GetTransactionReceiptResult)];
+  type MultiGetTransactionReceiptResult_ = {
+    #Consistent: GetTransactionReceiptResult_;
+    #Inconsistent: [(RpcService, GetTransactionReceiptResult_)];
+  };
+
+  type MultiGetTransactionResult_ = {
+    #Consistent: GetTransactionResult_;
+    #Inconsistent: [(RpcService, GetTransactionResult_)];
   };
 
   type RpcService = {
@@ -82,17 +110,78 @@ module {
     #Provider: Nat64;
   };
 
-  type GetTransactionReceiptResult = {
-    #Ok: ?TransactionReceipt;
-    #Err: RpcError;
+  type GetTransactionReceiptResult_ = {
+    #Ok: ?TransactionReceipt_;
+    #Err: RpcError_;
   };
 
-  type RpcError = {
+  type GetTransactionResult_ = {
+    #Ok: ?Transaction_;
+    #Err: RpcError_;
+  };
+
+  // JsonRpcError from EVM RPC canister
+  type JsonRpcError = {
     code: Int64;
     message: Text;
   };
 
-  type TransactionReceipt = {
+  // Error types matching official EVM RPC canister
+  type ProviderError = {
+    #TooFewCycles : { expected: Nat; received: Nat };
+    #MissingRequiredProvider;
+    #ProviderNotFound;
+    #NoPermission;
+    #InvalidRpcConfig : Text;
+  };
+
+  type ValidationError = {
+    #Custom : Text;
+    #InvalidHex : Text;
+  };
+
+  type RejectionCode = {
+    #NoError;
+    #CanisterError;
+    #SysTransient;
+    #DestinationInvalid;
+    #Unknown;
+    #SysFatal;
+    #CanisterReject;
+  };
+
+  type HttpOutcallError = {
+    #IcError : { code: RejectionCode; message: Text };
+    #InvalidHttpJsonRpcResponse : {
+      status: Nat16;
+      body: Text;
+      parsingError: ?Text;
+    };
+  };
+
+  // RpcError is a variant - matches EVM RPC canister
+  type RpcError_ = {
+    #JsonRpcError : JsonRpcError;
+    #ProviderError : ProviderError;
+    #ValidationError : ValidationError;
+    #HttpOutcallError : HttpOutcallError;
+  };
+
+  type Transaction_ = {
+    hash: Text;
+    nonce: Nat;
+    blockHash: ?Text;
+    blockNumber: ?Nat;
+    transactionIndex: ?Nat;
+    from: Text;
+    to: ?Text;
+    value: Nat;  // THIS IS WHAT WE NEED!
+    gas: Nat;
+    gasPrice: Nat;
+    input: Text;
+  };
+
+  type TransactionReceipt_ = {
     to: ?Text;
     status: ?Nat;
     transactionHash: Text;
@@ -100,7 +189,8 @@ module {
     from: Text;
     logs: [LogEntry];
     blockHash: Text;
-    txType: Text;  // Renamed from "type" to avoid reserved keyword
+    // Note: "type" field from EVM RPC is omitted because it's a reserved keyword
+    // Candid will ignore extra fields during deserialization
     transactionIndex: Nat;
     effectiveGasPrice: Nat;
     logsBloom: Text;
@@ -109,8 +199,6 @@ module {
     cumulativeGasUsed: Nat;
     root: ?Text;
   };
-
-  type Int64 = Int;
 
   type GetLogsRequest = {
     addresses: [Text];
@@ -137,244 +225,195 @@ module {
     removed: Bool;
   };
 
-  /// Get EVM RPC canister actor
-  func getEVMRPC(canisterId: Principal) : EVMRPCCanister {
+  /// Get EVM RPC canister actor (for use by actors)
+  public func getEVMRPC(canisterId: Principal) : EVMRPCCanister {
     actor(Principal.toText(canisterId))
   };
 
-  /// Convert chain ID to RpcServices
-  func chainIdToRpcServices(chainId: Nat) : RpcServices {
-    switch (chainId) {
-      case (1) { #EthMainnet(null) };      // Ethereum Mainnet
-      case (11155111) { #EthSepolia(null) }; // Sepolia testnet
-      case (8453) { #BaseMainnet(null) };   // Base Mainnet
-      case (42161) { #ArbitrumOne(null) };  // Arbitrum One
-      case (10) { #OptimismMainnet(null) }; // Optimism Mainnet
-      case (_) {
-        // For other chains, use Custom
-        #Custom({ chainId = Nat64.fromNat(chainId); services = [] })
+  /// Convert chain ID to RpcServices (helper for actors)
+  public func chainIdToRpcServices(chainId: Nat, customRpcUrls: ?[Text]) : RpcServices_ {
+    // If custom RPC URLs provided, use them
+    switch (customRpcUrls) {
+      case (?urls) {
+        let services = Array.map<Text, RpcApi>(urls, func(url) {
+          { url = url; headers = null }
+        });
+        #Custom({ chainId = Nat64.fromNat(chainId); services = services })
+      };
+      case null {
+        // Use default providers
+        switch (chainId) {
+          case (1) { #EthMainnet(null) };      // Ethereum Mainnet
+          case (11155111) { #EthSepolia(null) }; // Sepolia testnet
+          case (8453) { #BaseMainnet(null) };   // Base Mainnet
+          case (42161) { #ArbitrumOne(null) };  // Arbitrum One
+          case (10) { #OptimismMainnet(null) }; // Optimism Mainnet
+          case (_) {
+            // For other chains, use Custom with empty services
+            #Custom({ chainId = Nat64.fromNat(chainId); services = [] })
+          };
+        };
+      };
+    };
+  };
+
+  /// Helper: Extract receipt from multi-provider response
+  /// Handles both Consistent and Inconsistent responses
+  public func extractReceipt(response: MultiGetTransactionReceiptResult_) : ?TransactionReceipt_ {
+    switch (response) {
+      case (#Consistent(#Ok(receipt))) { receipt };
+      case (#Consistent(#Err(_))) { null };
+      case (#Inconsistent(results)) {
+        // Try to find a valid receipt from any provider
+        for ((_, result) in results.vals()) {
+          switch (result) {
+            case (#Ok(?receipt)) { return ?receipt };
+            case _ {};
+          };
+        };
+        null
       };
     }
   };
 
-  /// Verify native ETH deposit via transaction receipt
-  /// Returns the verified amount if transaction is successful
-  public func verifyNativeDeposit(
-    config: Config,
-    address: Text,
-    expectedAmount: Nat,
-    chainId: Nat,
-    txHash: Text
-  ) : async VerificationResult {
-    if (not Utils.isValidEthAddress(address)) {
-      return #Failed("Invalid Ethereum address");
-    };
-
-    if (Text.size(txHash) < 66) {  // "0x" + 64 hex chars
-      return #Failed("Invalid transaction hash");
-    };
-
-    try {
-      let rpc = getEVMRPC(config.evm_rpc_canister_id);
-
-      let rpcServices = chainIdToRpcServices(chainId);
-      let rpcConfig : ?RpcConfig = null; // Use default config
-
-      let response = await rpc.eth_getTransactionReceipt(rpcServices, rpcConfig, txHash);
-
-      // Handle multi-provider response
-      let receiptResult = switch (response) {
-        case (#Consistent(result)) { result };
-        case (#Inconsistent(results)) {
-          // If providers disagree, return error
-          // In production, you might want to handle this differently
-          return #Failed("Providers returned inconsistent results");
+  /// Helper: Extract transaction from multi-provider response
+  /// Handles both Consistent and Inconsistent responses
+  public func extractTransaction(response: MultiGetTransactionResult_) : ?Transaction_ {
+    switch (response) {
+      case (#Consistent(#Ok(tx))) { tx };
+      case (#Consistent(#Err(_))) { null };
+      case (#Inconsistent(results)) {
+        // Try to find a valid transaction from any provider
+        for ((_, result) in results.vals()) {
+          switch (result) {
+            case (#Ok(?tx)) { return ?tx };
+            case _ {};
+          };
         };
+        null
       };
-
-      switch (receiptResult) {
-        case (#Ok(?receipt)) {
-          // Check transaction was successful
-          let status = switch (receipt.status) {
-            case (?s) s;
-            case null { return #Failed("Transaction status unknown") };
-          };
-
-          if (status != 1) {
-            return #Failed("Transaction failed (status: 0)");
-          };
-
-          // Verify recipient address matches
-          let receiptTo = switch (receipt.to) {
-            case (?t) Text.toLowercase(t);
-            case null { return #Failed("Transaction has no recipient") };
-          };
-
-          let expectedTo = Text.toLowercase(address);
-          if (receiptTo != expectedTo) {
-            return #Failed("Transaction sent to wrong address: " # receiptTo);
-          };
-
-          // For native ETH, we need to parse the value from logs or trace
-          // Since eth_getTransactionReceipt doesn't include value for native transfers,
-          // we'll accept any successful transaction to the correct address
-          // In production, you'd use eth_getTransactionByHash to get the value
-          #Success({
-            amount = expectedAmount;  // Assume correct for now
-            tx_hash = txHash;
-          })
-        };
-        case (#Ok(null)) {
-          #Pending  // Transaction not yet confirmed
-        };
-        case (#Err(err)) {
-          #Failed("RPC error: " # err.message)
-        };
-      }
-    } catch (e) {
-      #Failed("Verification failed: " # Error.message(e))
     }
   };
 
-  /// Verify ERC20 token deposit via Transfer event logs
-  /// Checks for Transfer(from, to, amount) event to the target address
-  public func verifyERC20Deposit(
-    config: Config,
-    tokenAddress: Text,
-    recipientAddress: Text,
-    expectedAmount: Nat,
-    chainId: Nat,
-    fromBlock: ?Nat
-  ) : async VerificationResult {
-    if (not Utils.isValidEthAddress(tokenAddress)) {
-      return #Failed("Invalid token address");
-    };
-
-    if (not Utils.isValidEthAddress(recipientAddress)) {
-      return #Failed("Invalid recipient address");
-    };
-
-    try {
-      let rpc = getEVMRPC(config.evm_rpc_canister_id);
-
-      // ERC20 Transfer event signature
-      // keccak256("Transfer(address,address,uint256)")
-      let transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
-
-      // Filter for transfers TO the recipient address
-      // Topic[2] = recipient (indexed parameter)
-      let recipientTopic = addressToTopic(recipientAddress);
-
-      let request : GetLogsRequest = {
-        addresses = [tokenAddress];
-        fromBlock = switch (fromBlock) {
-          case (?block) natToHex(block);
-          case null "earliest";
-        };
-        toBlock = "latest";
-        topics = [
-          [transferTopic],  // Transfer event
-          [],               // Any sender
-          [recipientTopic], // Specific recipient
-        ];
-        chainId = Nat64.fromNat(chainId);
+  /// Helper: Extract JSON string from response (including from "Invalid" errors with status 200)
+  public func extractJsonString(response: MultiJsonRequestResult) : ?Text {
+    switch (response) {
+      case (#Consistent(#Ok(json))) { ?json };
+      case (#Consistent(#Err(#HttpOutcallError(#InvalidHttpJsonRpcResponse({ body; status; parsingError }))))) {
+        // EVM RPC returns complex objects as "Invalid" because it expects simple values
+        // But HTTP 200 means the JSON is actually valid - use the body
+        if (status == 200) { ?body } else { null }
       };
-
-      let response = await rpc.eth_getLogs(request);
-
-      switch (response) {
-        case (#Ok(result)) {
-          // Check if any transfer meets the expected amount
-          var totalDeposited : Nat = 0;
-          var latestTxHash : Text = "";
-
-          for (log in result.logs.vals()) {
-            // Parse amount from data field (uint256 = 32 bytes)
-            let amountOpt = Utils.hexToNat(log.data);
-            switch (amountOpt) {
-              case (?amount) {
-                totalDeposited += amount;
-                // Handle optional transactionHash
-                switch (log.transactionHash) {
-                  case (?hash) { latestTxHash := hash };
-                  case null {};
-                };
-              };
-              case null {};
+      case (#Inconsistent(results)) {
+        var foundJson : ?Text = null;
+        for ((_, result) in results.vals()) {
+          switch (result) {
+            case (#Ok(json)) { foundJson := ?json };
+            case (#Err(#HttpOutcallError(#InvalidHttpJsonRpcResponse({ body; status; parsingError })))) {
+              if (status == 200) { foundJson := ?body };
             };
+            case _ {};
           };
-
-          if (totalDeposited >= expectedAmount) {
-            #Success({
-              amount = totalDeposited;
-              tx_hash = latestTxHash;
-            })
-          } else {
-            #Pending
-          }
         };
-        case (#Err(err)) {
-          #Failed("RPC error: " # err)
-        };
-      }
-    } catch (e) {
-      #Failed("Verification failed: " # Error.message(e))
-    }
-  };
-
-  /// Verify deposit (routes to native or ERC20 based on token address)
-  public func verifyDeposit(
-    config: Config,
-    address: Text,
-    expectedAmount: Nat,
-    tokenAddress: Text,
-    chainId: Nat,
-    txHash: ?Text,
-    fromBlock: ?Nat
-  ) : async VerificationResult {
-    if (tokenAddress == "native") {
-      // Native ETH requires transaction hash
-      let hash = switch (txHash) {
-        case (?h) h;
-        case null { return #Failed("Transaction hash required for native ETH verification") };
+        foundJson
       };
-      await verifyNativeDeposit(config, address, expectedAmount, chainId, hash)
-    } else {
-      await verifyERC20Deposit(
-        config,
-        tokenAddress,
-        address,
-        expectedAmount,
-        chainId,
-        fromBlock
-      )
+      case _ { null };
     }
   };
 
-  /// Helper: Convert Ethereum address to EVM topic (padded to 32 bytes)
-  func addressToTopic(address: Text) : Text {
-    let cleanAddress = Text.trimStart(address, #text "0x");
-    // Pad address (20 bytes = 40 hex chars) to 32 bytes (64 hex chars)
-    let padding = "000000000000000000000000";  // 24 zeros
-    "0x" # padding # cleanAddress
-  };
-
-  /// Helper: Convert Nat to hex string
-  func natToHex(n: Nat) : Text {
-    if (n == 0) return "0x0";
-
-    var num = n;
-    var hex = "";
-    let hexChars = ["0", "1", "2", "3", "4", "5", "6", "7",
-                    "8", "9", "a", "b", "c", "d", "e", "f"];
-
-    while (num > 0) {
-      hex := hexChars[num % 16] # hex;
-      num := num / 16;
+  /// Helper: Parse transaction value from raw JSON-RPC response
+  /// Extracts the "value" field from eth_getTransactionByHash response
+  public func parseTransactionValue(response: MultiJsonRequestResult) : ?Nat {
+    // Extract JSON string (handles both #Ok and "Invalid" with status 200)
+    let jsonString = switch (extractJsonString(response)) {
+      case (?json) { json };
+      case null { return null };
     };
 
-    "0x" # hex
+    // Parse the "value" field from JSON
+    // Format: {"jsonrpc":"2.0","id":1,"result":{"value":"0x...",...}}
+    // Try both "value":" and "value": " (with space)
+
+    // First try without space
+    var parts = Iter.toArray(Text.split(jsonString, #text "\"value\":\""));
+    if (parts.size() < 2) {
+      // Try with space after colon
+      parts := Iter.toArray(Text.split(jsonString, #text "\"value\": \""));
+    };
+
+    if (parts.size() < 2) {
+      return null;
+    };
+
+    // Get the part after "value":"
+    let afterValue = parts[1];
+
+    // Find the closing quote (take everything until ")
+    let valueParts = Iter.toArray(Text.split(afterValue, #text "\""));
+    if (valueParts.size() < 1) {
+      return null;
+    };
+
+    let hexValue = valueParts[0];
+    // Convert hex to Nat
+    Utils.hexToNat(hexValue)
   };
+
+  /// Pure function: Validate transaction and receipt for native ETH deposit
+  /// This is a pure function - NO async calls, NO side effects
+  /// The actor is responsible for fetching the receipt and transaction value
+  public func validateTransactionReceipt(
+    receipt: ?TransactionReceipt_,
+    txValue: ?Nat,
+    expectedAddress: Text,
+    expectedAmount: Nat,
+    txHash: Text
+  ) : VerificationResult {
+    // Check receipt exists
+    let r = switch (receipt) {
+      case (?r) r;
+      case null { return #Pending };  // Transaction not yet confirmed
+    };
+
+    // Check transaction value was parsed
+    let actualValue = switch (txValue) {
+      case (?v) v;
+      case null { return #Failed("Could not parse transaction value") };
+    };
+
+    // Check transaction was successful
+    let status = switch (r.status) {
+      case (?s) s;
+      case null { return #Failed("Transaction status unknown") };
+    };
+
+    if (status != 1) {
+      return #Failed("Transaction failed (status: 0)");
+    };
+
+    // Verify recipient address matches
+    let receiptTo = switch (r.to) {
+      case (?t) Text.toLowercase(t);
+      case null { return #Failed("Transaction has no recipient") };
+    };
+
+    let expectedTo = Text.toLowercase(expectedAddress);
+    if (receiptTo != expectedTo) {
+      return #Failed("Transaction sent to wrong address: " # receiptTo);
+    };
+
+    // CRITICAL: Verify the ETH value sent
+    if (actualValue < expectedAmount) {
+      return #Failed("Insufficient ETH sent: expected " # Nat.toText(expectedAmount) # " wei, got " # Nat.toText(actualValue) # " wei");
+    };
+
+    // Success! Return verified amount (the actual amount sent)
+    #Success({
+      amount = actualValue;  // Return actual amount, not expected
+      tx_hash = txHash;
+    })
+  };
+
 
   /// Check if verification result is successful
   public func isSuccess(result: VerificationResult) : Bool {

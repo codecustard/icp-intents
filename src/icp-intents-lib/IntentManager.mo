@@ -337,13 +337,22 @@ module {
     #ok(generatedAddress)
   };
 
-  /// Claim fulfillment (solver or anyone can call with tx hash hint)
-  public func claimFulfillment(
+  /// Data needed to verify a cross-chain deposit
+  public type VerificationRequest = {
+    depositAddress: Text;
+    expectedAmount: Nat;
+    token: Text;
+    chainId: Nat;
+    txHash: Text;
+  };
+
+  /// Prepare claim fulfillment - returns verification parameters
+  /// This is a pure function - actor will handle actual verification
+  public func prepareClaimFulfillment(
     state: State,
     intentId: Nat,
-    txHashHint: ?Text,
-    currentTime: Time.Time
-  ) : async IntentResult<()> {
+    txHashHint: ?Text
+  ) : IntentResult<VerificationRequest> {
     // Get intent
     let intentOpt = state.intents.get(intentId);
     let intent = switch (intentOpt) {
@@ -368,25 +377,51 @@ module {
       case null { return #err(#InternalError("No selected quote")) };
     };
 
-    // Verify deposit on destination chain
     // Get chain ID from destination (for EVM chains)
     let chainId = switch (intent.destination.chain_id) {
       case (?id) id;
       case null { return #err(#InvalidChain) };
     };
 
-    let verificationResult = await Verification.verifyDeposit(
-      state.verificationConfig,
-      depositAddress,
-      quote.output_amount,
-      intent.destination.token,
-      chainId,
-      txHashHint,
-      null  // fromBlock - could optimize by storing block number
-    );
+    // Validate tx hash is provided
+    let txHash = switch (txHashHint) {
+      case (?hash) hash;
+      case null { return #err(#InternalError("Transaction hash required")) };
+    };
+
+    #ok({
+      depositAddress = depositAddress;
+      expectedAmount = quote.output_amount;
+      token = intent.destination.token;
+      chainId = chainId;
+      txHash = txHash;
+    })
+  };
+
+  /// Finalize fulfillment after verification
+  /// This is a pure function - takes verification result and updates state
+  public func finalizeFulfillment(
+    state: State,
+    intentId: Nat,
+    verificationResult: Types.VerificationResult,
+    txHash: Text,
+    currentTime: Time.Time
+  ) : IntentResult<()> {
+    // Get intent
+    let intentOpt = state.intents.get(intentId);
+    let intent = switch (intentOpt) {
+      case (?i) i;
+      case null { return #err(#NotFound) };
+    };
+
+    // Validate status
+    switch (intent.status) {
+      case (#Locked) {};
+      case _ { return #err(#InvalidStatus("Intent not locked")) };
+    };
 
     switch (verificationResult) {
-      case (#Success(data)) {
+      case (#Success(_data)) {
         // Release escrow to solver
         let releaseAmount = intent.escrow_balance;
         let protocolFee = Utils.calculateFee(releaseAmount, intent.protocol_fee_bps);
@@ -417,7 +452,7 @@ module {
         let updated : Intent = {
           intent with
           status = #Fulfilled;
-          solver_tx_hash = ?data.tx_hash;
+          solver_tx_hash = ?txHash;
           verified_at = ?currentTime;
         };
 
