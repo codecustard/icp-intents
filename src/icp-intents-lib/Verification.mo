@@ -299,7 +299,7 @@ module {
   public func extractJsonString(response: MultiJsonRequestResult) : ?Text {
     switch (response) {
       case (#Consistent(#Ok(json))) { ?json };
-      case (#Consistent(#Err(#HttpOutcallError(#InvalidHttpJsonRpcResponse({ body; status; parsingError }))))) {
+      case (#Consistent(#Err(#HttpOutcallError(#InvalidHttpJsonRpcResponse({ body; status; parsingError = _ }))))) {
         // EVM RPC returns complex objects as "Invalid" because it expects simple values
         // But HTTP 200 means the JSON is actually valid - use the body
         if (status == 200) { ?body } else { null }
@@ -309,7 +309,7 @@ module {
         for ((_, result) in results.vals()) {
           switch (result) {
             case (#Ok(json)) { foundJson := ?json };
-            case (#Err(#HttpOutcallError(#InvalidHttpJsonRpcResponse({ body; status; parsingError })))) {
+            case (#Err(#HttpOutcallError(#InvalidHttpJsonRpcResponse({ body; status; parsingError = _ })))) {
               if (status == 200) { foundJson := ?body };
             };
             case _ {};

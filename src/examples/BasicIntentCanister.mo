@@ -210,8 +210,7 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
     let rpcServices = Verification.chainIdToRpcServices(verificationRequest.chainId, intent.custom_rpc_urls);
 
     // Fetch receipt (for success status and destination address)
-    ExperimentalCycles.add<system>(10_000_000_000); // 10B cycles
-    let rpcResponse = await evmRpc.eth_getTransactionReceipt(
+    let rpcResponse = await (with cycles = 10_000_000_000) evmRpc.eth_getTransactionReceipt(
       rpcServices,
       null,
       verificationRequest.txHash
@@ -220,8 +219,7 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
     // Fetch transaction using multi_request (to get value field)
     let jsonRpcRequest = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionByHash\",\"params\":[\"" # verificationRequest.txHash # "\"],\"id\":1}";
 
-    ExperimentalCycles.add<system>(10_000_000_000); // 10B cycles
-    let txResponse = await evmRpc.multi_request(
+    let txResponse = await (with cycles = 10_000_000_000) evmRpc.multi_request(
       rpcServices,
       null,  // Use default RPC config
       jsonRpcRequest
