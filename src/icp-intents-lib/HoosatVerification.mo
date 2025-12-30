@@ -11,13 +11,12 @@ import Principal "mo:base/Principal";
 import Blob "mo:base/Blob";
 import Array "mo:base/Array";
 import Nat "mo:base/Nat";
-import Nat8 "mo:base/Nat8";
-import Nat16 "mo:base/Nat16";
 import Nat32 "mo:base/Nat32";
 import Nat64 "mo:base/Nat64";
 import Text "mo:base/Text";
 import Debug "mo:base/Debug";
-import Buffer "mo:base/Buffer";
+import Iter "mo:base/Iter";
+import Error "mo:base/Error";
 
 import HoosatAddress "mo:hoosat-mo/address";
 import HoosatSighash "mo:hoosat-mo/sighash";
@@ -52,7 +51,32 @@ module {
     #Failed: Text;
   };
 
-  /// IC Management canister interface for tECDSA
+  /// HTTP header for IC HTTP outcalls
+  public type HttpHeader = {
+    name : Text;
+    value : Text;
+  };
+
+  /// HTTP transform function for IC HTTP outcalls
+  public type TransformContext = {
+    function : shared query TransformArgs -> async HttpResponse;
+    context : Blob;
+  };
+
+  /// Transform arguments
+  public type TransformArgs = {
+    response : HttpResponse;
+    context : Blob;
+  };
+
+  /// HTTP response from IC outcall
+  public type HttpResponse = {
+    status : Nat;
+    headers : [HttpHeader];
+    body : Blob;
+  };
+
+  /// IC Management canister interface for tECDSA and HTTP outcalls
   public type ManagementCanister = actor {
     ecdsa_public_key : ({
       canister_id : ?Principal;
@@ -65,11 +89,67 @@ module {
       derivation_path : [Blob];
       key_id : { curve : { #secp256k1 }; name : Text };
     }) -> async ({ signature : Blob });
+
+    http_request : ({
+      url : Text;
+      max_response_bytes : ?Nat64;
+      method : { #get; #head; #post };
+      headers : [HttpHeader];
+      body : ?Blob;
+      transform : ?TransformContext;
+      is_replicated : ?Bool;
+    }) -> async HttpResponse;
   };
 
   /// Get management canister actor
   public func getManagementCanister() : ManagementCanister {
     actor("aaaaa-aa")
+  };
+
+  /// Extract a field value from JSON text (simple parser for specific fields)
+  /// Returns the string value between quotes after the field name
+  func extractJsonField(json: Text, field: Text) : ?Text {
+    let pattern = "\"" # field # "\":\"";
+    let parts = Text.split(json, #text pattern);
+    let iter = parts;
+    ignore iter.next(); // Skip first part before field
+
+    switch (iter.next()) {
+      case null { null };
+      case (?afterField) {
+        // Find the closing quote
+        let valueParts = Text.split(afterField, #text "\"");
+        valueParts.next()
+      };
+    }
+  };
+
+  /// Parse Nat from Text (handles string numbers from JSON)
+  func parseNat(text: Text) : ?Nat {
+    var num : Nat = 0;
+    for (c in text.chars()) {
+      let digit = switch (c) {
+        case '0' { 0 };
+        case '1' { 1 };
+        case '2' { 2 };
+        case '3' { 3 };
+        case '4' { 4 };
+        case '5' { 5 };
+        case '6' { 6 };
+        case '7' { 7 };
+        case '8' { 8 };
+        case '9' { 9 };
+        case _ { return null };
+      };
+      num := num * 10 + digit;
+    };
+    ?num
+  };
+
+  /// Check if text contains substring (needed because Text.contains requires literal patterns)
+  func textContains(haystack: Text, needle: Text) : Bool {
+    let parts = Iter.toArray(Text.split(haystack, #text needle));
+    parts.size() > 1
   };
 
   /// Generate a Hoosat deposit address for an intent using tECDSA
@@ -107,29 +187,118 @@ module {
   };
 
   /// Verify that a UTXO exists and matches expected criteria
-  /// This is a placeholder - needs actual RPC integration
+  /// Calls Hoosat REST API to verify the deposit
   public func verifyUTXO(
     request: HoosatVerificationRequest,
-    _config: HoosatConfig
+    config: HoosatConfig
   ) : async VerificationResult {
-    // TODO: Implement actual Hoosat RPC calls
-    // For now, return a placeholder
+    try {
+      let management = getManagementCanister();
 
-    Debug.print("HoosatVerification: Verifying UTXO");
-    Debug.print("  TX ID: " # request.tx_id);
-    Debug.print("  Expected address: " # request.expected_address);
-    Debug.print("  Expected amount: " # Nat.toText(request.expected_amount));
+      // Use provided RPC URL or default to mainnet
+      let baseUrl = if (Text.size(config.rpc_url) > 0) {
+        config.rpc_url
+      } else {
+        "https://api.network.hoosat.fi"
+      };
 
-    // Placeholder UTXO (would come from RPC)
-    let utxo : UTXO = {
-      tx_id = request.tx_id;
-      output_index = request.output_index;
-      amount = request.expected_amount;
-      script_pubkey = Blob.fromArray([]);
-      address = request.expected_address;
-    };
+      // Call GET /addresses/{address}/utxos
+      // Normalize address to lowercase (API requires lowercase "hoosat:" prefix)
+      let normalizedAddress = if (Text.startsWith(request.expected_address, #text "Hoosat:")) {
+        "hoosat:" # Text.trimStart(request.expected_address, #text "Hoosat:")
+      } else {
+        request.expected_address
+      };
 
-    #Success(utxo)
+      let url = baseUrl # "/addresses/" # normalizedAddress # "/utxos";
+
+      Debug.print("HoosatVerification: Calling " # url);
+
+      let httpResponse = try {
+        await (with cycles = 230_000_000_000) management.http_request({
+          url = url;
+          max_response_bytes = ?16384; // 16KB for UTXO list
+          method = #get;
+          headers = [{
+            name = "Accept";
+            value = "application/json";
+          }];
+          body = null;
+          transform = null;
+          is_replicated = ?false;
+        })
+      } catch (err) {
+        let errorMsg = Error.message(err);
+        Debug.print("HoosatVerification: HTTP request error: " # errorMsg);
+        return #Failed("HTTP request error: " # errorMsg);
+      };
+
+      Debug.print("HoosatVerification: HTTP response status: " # Nat.toText(httpResponse.status));
+
+      if (httpResponse.status != 200) {
+        return #Failed("Hoosat API returned status " # Nat.toText(httpResponse.status));
+      };
+
+      // Parse response body
+      let responseText = switch (Text.decodeUtf8(httpResponse.body)) {
+        case null { return #Failed("Invalid UTF-8 in response") };
+        case (?text) { text };
+      };
+
+      Debug.print("HoosatVerification: Response: " # responseText);
+
+      // Parse JSON array to find matching UTXO
+      // Response format: [{"outpoint": {"transactionId": "...", "index": 0}, "utxoEntry": {"amount": "...", ...}}]
+
+      // Simple approach: search for the transaction ID in the response
+      if (not textContains(responseText, request.tx_id)) {
+        return #Failed("Transaction " # request.tx_id # " not found in UTXOs for address");
+      };
+
+      // Extract the UTXO data by finding the matching transaction
+      // Look for the pattern: "transactionId":"<tx_id>"
+      let txIdPattern = "\"transactionId\":\"" # request.tx_id # "\"";
+      if (not textContains(responseText, txIdPattern)) {
+        return #Failed("Transaction ID not found in expected format");
+      };
+
+      // Find the amount field after the matching transaction
+      // We need to extract: "amount":"<value>"
+      let amountOpt = extractJsonField(responseText, "amount");
+      let amount = switch (amountOpt) {
+        case null { return #Failed("Could not extract amount from response") };
+        case (?amountStr) {
+          switch (parseNat(amountStr)) {
+            case null { return #Failed("Invalid amount format: " # amountStr) };
+            case (?amt) { amt };
+          }
+        };
+      };
+
+      // Verify amount matches expected
+      if (amount < request.expected_amount) {
+        return #Failed("Amount mismatch: expected " # Nat.toText(request.expected_amount) # " but got " # Nat.toText(amount));
+      };
+
+      // Extract scriptPublicKey if available
+      let scriptPubKey = switch (extractJsonField(responseText, "scriptPublicKey")) {
+        case null { Blob.fromArray([]) };
+        case (?spk) { Text.encodeUtf8(spk) };
+      };
+
+      // Success - construct UTXO
+      let utxo : UTXO = {
+        tx_id = request.tx_id;
+        output_index = request.output_index;
+        amount = amount;
+        script_pubkey = scriptPubKey;
+        address = request.expected_address;
+      };
+
+      #Success(utxo)
+    } catch (_) {
+      #Failed("HTTP request failed or response parsing error")
+    }
   };
 
   /// Build and sign a Hoosat transaction to release funds to solver

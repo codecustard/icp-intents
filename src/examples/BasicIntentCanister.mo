@@ -227,7 +227,7 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
         output_index = 0; // Typically first output
       };
 
-      switch (await HoosatVerification.verifyUTXO(hoosatRequest, hoosatConfig)) {
+      switch (await (with cycles = 230_000_000_000) HoosatVerification.verifyUTXO(hoosatRequest, hoosatConfig)) {
         case (#Success(utxo)) {
           #Success({
             amount = utxo.amount;
