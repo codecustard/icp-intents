@@ -16,6 +16,7 @@ import Principal "mo:base/Principal";
 import Time "mo:base/Time";
 import Timer "mo:base/Timer";
 import Nat "mo:base/Nat";
+import Text "mo:base/Text";
 import Debug "mo:base/Debug";
 import Result "mo:base/Result";
 import Array "mo:base/Array";
@@ -28,6 +29,7 @@ import IntentManager "../icp-intents-lib/IntentManager";
 import Escrow "../icp-intents-lib/Escrow";
 import Utils "../icp-intents-lib/Utils";
 import Verification "../icp-intents-lib/Verification";
+import HoosatVerification "../icp-intents-lib/HoosatVerification";
 
 // Import ICRC-1/ICRC-2 token types
 import ICRC2 "mo:icrc2-types";
@@ -205,58 +207,92 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
       case (?i) { i };
     };
 
-    // STEP 3: Make EVM RPC calls from actor (with cycles)
-    let evmRpc = Verification.getEVMRPC(verificationConfig.evm_rpc_canister_id);
-    let rpcServices = Verification.chainIdToRpcServices(verificationRequest.chainId, intent.custom_rpc_urls);
-
-    // Fetch receipt (for success status and destination address)
-    let rpcResponse = await (with cycles = 10_000_000_000) evmRpc.eth_getTransactionReceipt(
-      rpcServices,
-      null,
-      verificationRequest.txHash
-    );
-
-    // Fetch transaction using multi_request (to get value field)
-    let jsonRpcRequest = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionByHash\",\"params\":[\"" # verificationRequest.txHash # "\"],\"id\":1}";
-
-    let txResponse = await (with cycles = 10_000_000_000) evmRpc.multi_request(
-      rpcServices,
-      null,  // Use default RPC config
-      jsonRpcRequest
-    );
-
-    // STEP 4: Extract from multi-provider responses
-    let receipt = Verification.extractReceipt(rpcResponse);
-
-    // Parse JSON response to get value
-    let txValue = Verification.parseTransactionValue(txResponse);
-
-    // If parsing failed, include JSON in error for debugging
-    if (Option.isNull(txValue)) {
-      let jsonStr = Verification.extractJsonString(txResponse);
-      let errorMsg = switch (jsonStr) {
-        case (?json) { "Could not parse transaction value. JSON: " # json };
-        case null {
-          // No JSON means we got an error response
-          let rpcErrorMsg = switch (txResponse) {
-            case (#Consistent(#Err(err))) { "EVM RPC error: " # debug_show(err) };
-            case (#Inconsistent(results)) { "EVM RPC inconsistent responses: " # debug_show(results) };
-            case _ { "Could not parse transaction value. No JSON response received." };
-          };
-          rpcErrorMsg
+    // STEP 3: Verify based on destination chain
+    let verificationResult = if (Text.equal(intent.destination.chain, "hoosat")) {
+      // Hoosat UTXO verification
+      let hoosatConfig : HoosatVerification.HoosatConfig = {
+        rpc_url = switch (intent.custom_rpc_urls) {
+          case (?urls) { if (urls.size() > 0) { urls[0] } else { "" } };
+          case null { "" };
         };
+        network = intent.destination.network;
+        confirmations = 10;
+        ecdsa_key_name = tecdsaConfig.key_name;
       };
-      return #err(#VerificationFailed(errorMsg));
-    };
 
-    // STEP 5: Validate receipt AND transaction value (pure function)
-    let verificationResult = Verification.validateTransactionReceipt(
-      receipt,
-      txValue,
-      verificationRequest.depositAddress,
-      verificationRequest.expectedAmount,
-      verificationRequest.txHash
-    );
+      let hoosatRequest : HoosatVerification.HoosatVerificationRequest = {
+        tx_id = verificationRequest.txHash;
+        expected_address = verificationRequest.depositAddress;
+        expected_amount = verificationRequest.expectedAmount;
+        output_index = 0; // Typically first output
+      };
+
+      switch (await HoosatVerification.verifyUTXO(hoosatRequest, hoosatConfig)) {
+        case (#Success(utxo)) {
+          #Success({
+            amount = utxo.amount;
+            tx_hash = verificationRequest.txHash;
+          })
+        };
+        case (#Failed(msg)) { #Failed(msg) };
+      };
+    } else {
+      // Ethereum verification (existing flow)
+      // For EVM chains, chainId must be present
+      let chainId = switch (verificationRequest.chainId) {
+        case (?id) { id };
+        case null { return #err(#InvalidChain) };
+      };
+
+      let evmRpc = Verification.getEVMRPC(verificationConfig.evm_rpc_canister_id);
+      let rpcServices = Verification.chainIdToRpcServices(chainId, intent.custom_rpc_urls);
+
+      // Fetch receipt (for success status and destination address)
+      let rpcResponse = await (with cycles = 10_000_000_000) evmRpc.eth_getTransactionReceipt(
+        rpcServices,
+        null,
+        verificationRequest.txHash
+      );
+
+      // Fetch transaction using multi_request (to get value field)
+      let jsonRpcRequest = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionByHash\",\"params\":[\"" # verificationRequest.txHash # "\"],\"id\":1}";
+
+      let txResponse = await (with cycles = 10_000_000_000) evmRpc.multi_request(
+        rpcServices,
+        null,
+        jsonRpcRequest
+      );
+
+      // Extract from multi-provider responses
+      let receipt = Verification.extractReceipt(rpcResponse);
+      let txValue = Verification.parseTransactionValue(txResponse);
+
+      // If parsing failed, return error
+      if (Option.isNull(txValue)) {
+        let jsonStr = Verification.extractJsonString(txResponse);
+        let errorMsg = switch (jsonStr) {
+          case (?json) { "Could not parse transaction value. JSON: " # json };
+          case null {
+            let rpcErrorMsg = switch (txResponse) {
+              case (#Consistent(#Err(err))) { "EVM RPC error: " # debug_show(err) };
+              case (#Inconsistent(results)) { "EVM RPC inconsistent responses: " # debug_show(results) };
+              case _ { "Could not parse transaction value. No JSON response received." };
+            };
+            rpcErrorMsg
+          };
+        };
+        return #err(#VerificationFailed(errorMsg));
+      };
+
+      // Validate receipt AND transaction value
+      Verification.validateTransactionReceipt(
+        receipt,
+        txValue,
+        verificationRequest.depositAddress,
+        verificationRequest.expectedAmount,
+        verificationRequest.txHash
+      )
+    };
 
     // STEP 6: Finalize fulfillment (pure function - updates state)
     let finalizeResult = IntentManager.finalizeFulfillment(

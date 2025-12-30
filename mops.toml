@@ -11,6 +11,7 @@ base = "0.16.0"
 map = "9.0.1"
 sha3 = "0.1.1"
 icrc2-types = "1.1.0"
+hoosat-mo = "0.2.3"
 
 [dev-dependencies]
 test = "2.1.1"

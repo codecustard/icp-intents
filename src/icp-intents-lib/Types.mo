@@ -28,10 +28,25 @@ module {
     #Cancelled; /// User cancelled before locking
   };
 
+  /// Chain model type - determines how deposits/releases work
+  public type ChainModel = {
+    #AccountBased;  /// ETH, ICP, Solana - track balances per address
+    #UtxoBased;     /// Bitcoin, Kaspa, Hoosat - track unspent outputs
+  };
+
+  /// UTXO (Unspent Transaction Output) for UTXO-based chains
+  public type UTXO = {
+    tx_id: Text;           /// Transaction hash
+    output_index: Nat;     /// Which output in the transaction
+    amount: Nat;           /// Amount in smallest unit (satoshis, hootas, etc.)
+    script_pubkey: Blob;   /// Locking script
+    address: Text;         /// Address that can spend this UTXO
+  };
+
   /// Fully extensible chain asset definition
   /// Works for ANY blockchain (ICP, EVM, Bitcoin, Solana, etc.)
   public type ChainAsset = {
-    chain: Text;        /// "icp", "ethereum", "base", "bitcoin", "solana", etc.
+    chain: Text;        /// "icp", "ethereum", "base", "bitcoin", "solana", "hoosat", etc.
     chain_id: ?Nat;     /// For EVM chains: 1, 8453, 11155111, etc. (null for non-EVM)
     token: Text;        /// "native", ERC20 address, or ICRC-1 canister ID
     network: Text;      /// "mainnet", "testnet", "sepolia", etc.
@@ -75,6 +90,9 @@ module {
     solver_tx_hash: ?Text;   /// Tx hash hint from solver (optional)
     verified_at: ?Time.Time; /// Verification success timestamp
 
+    /// UTXO tracking (for UTXO-based destination chains)
+    deposited_utxo: ?UTXO;   /// UTXO received from solver (Hoosat, Kaspa, Bitcoin, etc.)
+
     /// Economics
     protocol_fee_bps: Nat;   /// Protocol fee in basis points (30 = 0.3%)
 
@@ -88,8 +106,9 @@ module {
   public type ChainConfig = {
     chain_id: Nat;
     name: Text;
-    native_symbol: Text;     /// "ETH", "BNB", etc.
+    native_symbol: Text;     /// "ETH", "BNB", "HTN", etc.
     block_confirmations: Nat; /// Blocks to wait for finality
+    model: ChainModel;       /// Account-based or UTXO-based
     is_evm: Bool;            /// True for EVM chains (enables EVM RPC)
   };
 

@@ -16,6 +16,7 @@
 import Principal "mo:base/Principal";
 import Time "mo:base/Time";
 import Nat "mo:base/Nat";
+import Nat32 "mo:base/Nat32";
 import Text "mo:base/Text";
 import Array "mo:base/Array";
 import HashMap "mo:base/HashMap";
@@ -28,6 +29,7 @@ import Utils "../icp-intents-lib/Utils";
 import Escrow "../icp-intents-lib/Escrow";
 import TECDSA "../icp-intents-lib/TECDSA";
 import Verification "../icp-intents-lib/Verification";
+import HoosatVerification "../icp-intents-lib/HoosatVerification";
 
 module {
   type Intent = Types.Intent;
@@ -52,6 +54,13 @@ module {
     supportedChains: [Nat];  // Supported chain IDs
   };
 
+  /// Hash function for Nat intent IDs (sequential integers)
+  func natHash(n: Nat) : Hash.Hash {
+    // For sequential IDs, use simple modulo hash
+    // This is safe for intent IDs which are small sequential integers
+    Nat32.fromNat(n % 4294967295)
+  };
+
   /// Initialize intent manager
   public func init(
     config: ProtocolConfig,
@@ -61,7 +70,7 @@ module {
   ) : State {
     {
       config = config;
-      intents = HashMap.HashMap<Nat, Intent>(10, Nat.equal, Hash.hash);
+      intents = HashMap.HashMap<Nat, Intent>(10, Nat.equal, natHash);
       var nextIntentId = 1;
       events = Buffer.Buffer<Event>(100);
       escrow = Escrow.init();
@@ -131,8 +140,22 @@ module {
       case null {};
     };
 
-    if (not Utils.isValidEthAddress(request.dest_recipient)) {
-      return #err(#InvalidAddress);
+    // Validate destination address based on chain type
+    // For Ethereum/EVM chains, validate as 0x address
+    // For UTXO chains (Hoosat, Kaspa, Bitcoin), validate has content (basic check)
+    // For ICP, validate has content
+    if (Text.equal(request.destination.chain, "ethereum") or
+        Text.equal(request.destination.chain, "base") or
+        Text.equal(request.destination.chain, "arbitrum") or
+        Text.equal(request.destination.chain, "optimism")) {
+      if (not Utils.isValidEthAddress(request.dest_recipient)) {
+        return #err(#InvalidAddress);
+      };
+    } else {
+      // For non-EVM chains, just check address is not empty
+      if (Text.size(request.dest_recipient) == 0) {
+        return #err(#InvalidAddress);
+      };
     };
 
     if (not Utils.isValidDeadline(request.deadline, currentTime, state.config.max_intent_lifetime)) {
@@ -160,6 +183,7 @@ module {
       generated_address = null;
       solver_tx_hash = null;
       verified_at = null;
+      deposited_utxo = null;
       protocol_fee_bps = state.config.default_protocol_fee_bps;
       custom_rpc_urls = request.custom_rpc_urls;
       verification_hints = request.verification_hints;
@@ -300,12 +324,24 @@ module {
       case (#ok(_)) {};
     };
 
-    // Generate tECDSA address for solver deposit
-    let addressResult = await TECDSA.deriveAddress(
-      state.tecdsaConfig,
-      intentId,
-      caller
-    );
+    // Generate deposit address based on destination chain
+    let addressResult = if (Text.equal(intent.destination.chain, "hoosat")) {
+      // Generate Hoosat address using HoosatVerification
+      let hoosatConfig : HoosatVerification.HoosatConfig = {
+        rpc_url = ""; // Not needed for address generation
+        network = intent.destination.network;
+        confirmations = 10;
+        ecdsa_key_name = state.tecdsaConfig.key_name;
+      };
+      await HoosatVerification.generateDepositAddress(intentId, hoosatConfig)
+    } else {
+      // Default to Ethereum address generation
+      await TECDSA.deriveAddress(
+        state.tecdsaConfig,
+        intentId,
+        caller
+      )
+    };
 
     let generatedAddress = switch (addressResult) {
       case (#ok(addr)) addr;
@@ -342,7 +378,7 @@ module {
     depositAddress: Text;
     expectedAmount: Nat;
     token: Text;
-    chainId: Nat;
+    chainId: ?Nat;  // Optional: null for non-EVM chains (Hoosat, Bitcoin, etc.)
     txHash: Text;
   };
 
@@ -377,12 +413,6 @@ module {
       case null { return #err(#InternalError("No selected quote")) };
     };
 
-    // Get chain ID from destination (for EVM chains)
-    let chainId = switch (intent.destination.chain_id) {
-      case (?id) id;
-      case null { return #err(#InvalidChain) };
-    };
-
     // Validate tx hash is provided
     let txHash = switch (txHashHint) {
       case (?hash) hash;
@@ -393,7 +423,7 @@ module {
       depositAddress = depositAddress;
       expectedAmount = quote.output_amount;
       token = intent.destination.token;
-      chainId = chainId;
+      chainId = intent.destination.chain_id;  // Optional: null for non-EVM chains
       txHash = txHash;
     })
   };

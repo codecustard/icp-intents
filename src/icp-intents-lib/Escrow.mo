@@ -15,7 +15,6 @@
 /// ```
 
 import Principal "mo:base/Principal";
-import Result "mo:base/Result";
 import HashMap "mo:base/HashMap";
 import Hash "mo:base/Hash";
 import Nat "mo:base/Nat";
@@ -96,7 +95,7 @@ module {
 
     let account = getOrCreateAccount(state, owner, token);
     let newBalance = account.balance + amount;
-    let newAvailable = newBalance - account.locked;
+    let newAvailable = Int.abs(Int.sub(newBalance, account.locked));
 
     let updated : EscrowAccount = {
       owner = account.owner;
@@ -128,7 +127,7 @@ module {
     };
 
     let newLocked = account.locked + amount;
-    let newAvailable = account.balance - newLocked;
+    let newAvailable = Int.abs(Int.sub(account.balance, newLocked));
 
     let updated : EscrowAccount = {
       owner = account.owner;
@@ -156,7 +155,7 @@ module {
     };
 
     let newLocked = Utils.safeSub(account.locked, amount);
-    let newAvailable = account.balance - newLocked;
+    let newAvailable = Int.abs(Int.sub(account.balance, newLocked));
 
     let updated : EscrowAccount = {
       owner = account.owner;
@@ -189,9 +188,9 @@ module {
       return #err(#InternalError("Balance < locked (invariant violated)"));
     };
 
-    let newBalance = account.balance - amount;
-    let newLocked = account.locked - amount;
-    let newAvailable = newBalance - newLocked;
+    let newBalance = Int.abs(Int.sub(account.balance, amount));
+    let newLocked = Int.abs(Int.sub(account.locked, amount));
+    let newAvailable = Int.abs(Int.sub(newBalance, newLocked));
 
     let updated : EscrowAccount = {
       owner = account.owner;
@@ -227,8 +226,8 @@ module {
       return #err(#InsufficientBalance);
     };
 
-    let newBalance = account.balance - amount;
-    let newAvailable = newBalance - account.locked;
+    let newBalance = Int.abs(Int.sub(account.balance, amount));
+    let newAvailable = Int.abs(Int.sub(newBalance, account.locked));
 
     let updated : EscrowAccount = {
       owner = account.owner;
