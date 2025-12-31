@@ -19,6 +19,12 @@
     "evm_rpc": {
       "type": "pull",
       "id": "7hfb6-caaaa-aaaar-qadga-cai"
+    },
+    "SimpleIntentPool": {
+      "main": "examples/simple-intent-pool/Main.mo",
+      "type": "motoko",
+      "wasm_memory_persistence": "keep",
+      "init_cycles": 5000000000000
     }
   },
   "defaults": {

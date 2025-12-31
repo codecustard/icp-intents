@@ -1,0 +1,584 @@
+/// Intent lifecycle management
+///
+/// Orchestrates intent creation, quote submission, verification, and fulfillment
+
+import Time "mo:base/Time";
+import Principal "mo:base/Principal";
+import HashMap "mo:base/HashMap";
+import Hash "mo:base/Hash";
+import Iter "mo:base/Iter";
+import Nat "mo:base/Nat";
+import Text "mo:base/Text";
+import Debug "mo:base/Debug";
+import Array "mo:base/Array";
+import Types "../core/Types";
+import State "../core/State";
+import Errors "../core/Errors";
+import Events "../core/Events";
+import ChainRegistry "../chains/ChainRegistry";
+import Escrow "../managers/Escrow";
+import FeeManager "../managers/FeeManager";
+import Validation "../utils/Validation";
+import Math "../utils/Math";
+
+module {
+  type Intent = Types.Intent;
+  type Quote = Types.Quote;
+  type IntentStatus = Types.IntentStatus;
+  type IntentResult<T> = Types.IntentResult<T>;
+  type IntentError = Types.IntentError;
+  type SystemConfig = Types.SystemConfig;
+  type ChainSpec = Types.ChainSpec;
+  type FeeBreakdown = Types.FeeBreakdown;
+
+  /// Manager state
+  public type ManagerState = {
+    var intents : HashMap.HashMap<Nat, Intent>;
+    var next_id : Nat;
+    escrow : Escrow.EscrowState;
+    fee_manager : FeeManager.FeeState;
+    chain_registry : ChainRegistry.RegistryState;
+    event_logger : Events.EventLogger;
+    config : SystemConfig;
+  };
+
+  /// Stable storage format
+  public type StableManagerData = {
+    intents : [(Nat, Intent)];
+    next_id : Nat;
+    escrow : Escrow.StableEscrowData;
+    chain_registry : ChainRegistry.StableRegistryData;
+  };
+
+  /// Initialize manager
+  public func init(config : SystemConfig) : ManagerState {
+    {
+      var intents = HashMap.HashMap<Nat, Intent>(100, Nat.equal, Hash.hash);
+      var next_id = 0;
+      escrow = Escrow.init();
+      fee_manager = FeeManager.init();
+      chain_registry = ChainRegistry.init();
+      event_logger = Events.EventLogger();
+      config = config;
+    }
+  };
+
+  /// Helper: Update intent preserving all fields
+  func updateIntent(
+    base : Intent,
+    status : ?IntentStatus,
+    quotes : ?[Quote],
+    selected_quote : ??Quote,
+    escrow_balance : ?Nat,
+    verified_at : ??Time.Time,
+    updated_at : Time.Time
+  ) : Intent {
+    {
+      id = base.id;
+      user = base.user;
+      source = base.source;
+      destination = base.destination;
+      source_amount = base.source_amount;
+      min_output = base.min_output;
+      dest_recipient = base.dest_recipient;
+      deadline = base.deadline;
+      status = switch (status) {case null base.status; case (?s) s };
+      quotes = switch (quotes) { case null base.quotes; case (?q) q };
+      selected_quote = switch (selected_quote) { case null base.selected_quote; case (?q) q };
+      escrow_balance = switch (escrow_balance) { case null base.escrow_balance; case (?e) e };
+      protocol_fee_bps = base.protocol_fee_bps;
+      created_at = base.created_at;
+      verified_at = switch (verified_at) { case null base.verified_at; case (?v) v };
+      generated_address = base.generated_address;
+      deposited_utxo = base.deposited_utxo;
+      solver_tx_hash = base.solver_tx_hash;
+      custom_rpc_urls = base.custom_rpc_urls;
+      verification_hints = base.verification_hints;
+      metadata = base.metadata;
+    }
+  };
+
+  /// Create a new intent
+  public func createIntent(
+    state : ManagerState,
+    user : Principal,
+    source : ChainSpec,
+    destination : ChainSpec,
+    source_amount : Nat,
+    min_output : Nat,
+    dest_recipient : Text,
+    deadline : Time.Time,
+    current_time : Time.Time
+  ) : IntentResult<Nat> {
+    // Validate inputs
+    switch (Validation.validateAmount(source_amount, state.config)) {
+      case (?err) { return #err(err) };
+      case null {};
+    };
+
+    switch (Validation.validateMinOutput(min_output, source_amount)) {
+      case (?err) { return #err(err) };
+      case null {};
+    };
+
+    switch (Validation.validateDeadline(deadline, current_time, state.config)) {
+      case (?err) { return #err(err) };
+      case null {};
+    };
+
+    switch (Validation.validateChainSpec(source, state.config)) {
+      case (?err) { return #err(err) };
+      case null {};
+    };
+
+    switch (Validation.validateChainSpec(destination, state.config)) {
+      case (?err) { return #err(err) };
+      case null {};
+    };
+
+    // Validate chains are supported
+    switch (ChainRegistry.validateSpec(state.chain_registry, source)) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(_)) {};
+    };
+
+    switch (ChainRegistry.validateSpec(state.chain_registry, destination)) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(_)) {};
+    };
+
+    // Create intent
+    let id = state.next_id;
+    state.next_id += 1;
+
+    let intent : Intent = {
+      id = id;
+      user = user;
+      source = source;
+      destination = destination;
+      source_amount = source_amount;
+      min_output = min_output;
+      dest_recipient = dest_recipient;
+      deadline = deadline;
+      status = #PendingQuote;
+      quotes = [];
+      selected_quote = null;
+      escrow_balance = 0;
+      protocol_fee_bps = state.config.protocol_fee_bps;
+      created_at = current_time;
+      verified_at = null;
+      generated_address = null;
+      deposited_utxo = null;
+      solver_tx_hash = null;
+      custom_rpc_urls = null;
+      verification_hints = null;
+      metadata = null;
+    };
+
+    state.intents.put(id, intent);
+
+    // Log event
+    state.event_logger.emit(#IntentCreated({
+      intent_id = id;
+      user = user;
+      source_chain = source.chain;
+      dest_chain = destination.chain;
+      amount = source_amount;
+      timestamp = current_time;
+    }));
+
+    Debug.print("IntentManager: Created intent #" # Nat.toText(id));
+    #ok(id)
+  };
+
+  /// Submit a quote for an intent
+  public func submitQuote(
+    state : ManagerState,
+    intent_id : Nat,
+    solver : Principal,
+    output_amount : Nat,
+    fee : Nat,
+    solver_tip : Nat,
+    solver_dest_address : ?Text,
+    current_time : Time.Time
+  ) : IntentResult<()> {
+    // Get intent
+    let intent = switch (state.intents.get(intent_id)) {
+      case null { return #err(#NotFound) };
+      case (?i) { i };
+    };
+
+    // Check if expired
+    if (Types.isExpired(intent, current_time)) {
+      return #err(#Expired);
+    };
+
+    // Validate solver is allowed
+    switch (Validation.validateSolver(solver, state.config)) {
+      case (?err) { return #err(err) };
+      case null {};
+    };
+
+    // Validate quote amount
+    switch (Validation.validateQuoteAmount(output_amount, intent.min_output, intent.source_amount)) {
+      case (?err) { return #err(err) };
+      case null {};
+    };
+
+    // Check intent can receive quotes
+    if (not Types.canReceiveQuotes(intent)) {
+      return #err(#InvalidStatus("Intent cannot receive quotes in current status"));
+    };
+
+    // Create quote (expiry = deadline or 1 hour, whichever is sooner)
+    let one_hour = 3_600_000_000_000; // 1 hour in nanoseconds
+    let quote_expiry = if (intent.deadline < current_time + one_hour) {
+      intent.deadline
+    } else {
+      current_time + one_hour
+    };
+
+    let quote : Quote = {
+      solver = solver;
+      output_amount = output_amount;
+      fee = fee;
+      solver_tip = solver_tip;
+      solver_dest_address = solver_dest_address;
+      expiry = quote_expiry;
+      submitted_at = current_time;
+    };
+
+    // Add quote to intent
+    let updated_quotes = Array.append<Quote>(intent.quotes, [quote]);
+
+    // Transition to Quoted status
+    let transitioned = State.transitionToQuoted(intent);
+    let new_intent = switch (transitioned) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(i)) { i };
+    };
+
+    let updated_intent = updateIntent(
+      new_intent,
+      ?new_intent.status,
+      ?updated_quotes,
+      null,
+      null,
+      null,
+      current_time
+    );
+
+    state.intents.put(intent_id, updated_intent);
+
+    // Log event
+    state.event_logger.emit(#QuoteSubmitted({
+      intent_id = intent_id;
+      solver = solver;
+      output_amount = output_amount;
+      fee = fee;
+      quote_index = updated_quotes.size() - 1;
+      timestamp = current_time;
+    }));
+
+    Debug.print("IntentManager: Quote submitted for intent #" # Nat.toText(intent_id) # " by " # Principal.toText(solver));
+    #ok(())
+  };
+
+  /// Confirm a quote for an intent
+  public func confirmQuote(
+    state : ManagerState,
+    intent_id : Nat,
+    solver : Principal,
+    user : Principal,
+    current_time : Time.Time
+  ) : IntentResult<()> {
+    // Get intent
+    let intent = switch (state.intents.get(intent_id)) {
+      case null { return #err(#NotFound) };
+      case (?i) { i };
+    };
+
+    // Check authorization
+    if (intent.user != user) {
+      return #err(#NotIntentCreator);
+    };
+
+    // Check if expired
+    if (Types.isExpired(intent, current_time)) {
+      return #err(#Expired);
+    };
+
+    // Find quote from solver
+    let selected = Array.find<Quote>(intent.quotes, func(q) { q.solver == solver });
+    let quote = switch (selected) {
+      case null { return #err(#NotFound) };
+      case (?q) { q };
+    };
+
+    // Transition to Confirmed
+    let transitioned = State.transitionToConfirmed(intent, current_time);
+    let new_intent = switch (transitioned) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(i)) { i };
+    };
+
+    let updated_intent = updateIntent(
+      new_intent,
+      ?new_intent.status,
+      null,
+      ??quote,
+      null,
+      null,
+      current_time
+    );
+
+    state.intents.put(intent_id, updated_intent);
+
+    // Log event
+    state.event_logger.emit(#QuoteConfirmed({
+      intent_id = intent_id;
+      solver = solver;
+      quote_index = 0; // Placeholder - should track actual index
+      deposit_address = ""; // Should be generated
+      timestamp = current_time;
+    }));
+
+    Debug.print("IntentManager: Quote confirmed for intent #" # Nat.toText(intent_id));
+    #ok(())
+  };
+
+  /// Mark intent as deposited (after verification)
+  public func markDeposited(
+    state : ManagerState,
+    intent_id : Nat,
+    verified_amount : Nat,
+    current_time : Time.Time
+  ) : IntentResult<()> {
+    let intent = switch (state.intents.get(intent_id)) {
+      case null { return #err(#NotFound) };
+      case (?i) { i };
+    };
+
+    // Transition to Deposited
+    let transitioned = State.transitionToDeposited(intent, current_time, current_time);
+    let new_intent = switch (transitioned) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(i)) { i };
+    };
+
+    // Lock funds in escrow
+    switch (Escrow.lock(state.escrow, intent.user, intent.source.token, verified_amount)) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(())) {};
+    };
+
+    let updated_intent = updateIntent(
+      new_intent,
+      ?new_intent.status,
+      null,
+      null,
+      ?verified_amount,
+      ??current_time,
+      current_time
+    );
+
+    state.intents.put(intent_id, updated_intent);
+
+    // Log events
+    state.event_logger.emit(#DepositVerified({
+      intent_id = intent_id;
+      chain = intent.source.chain;
+      tx_hash = ""; // Should be passed in
+      amount = verified_amount;
+      timestamp = current_time;
+    }));
+
+    state.event_logger.emit(#EscrowLocked({
+      intent_id = intent_id;
+      user = intent.user;
+      token = intent.source.token;
+      amount = verified_amount;
+      timestamp = current_time;
+    }));
+
+    Debug.print("IntentManager: Intent #" # Nat.toText(intent_id) # " marked as deposited");
+    #ok(())
+  };
+
+  /// Fulfill an intent (release escrow to solver)
+  public func fulfillIntent(
+    state : ManagerState,
+    intent_id : Nat,
+    current_time : Time.Time
+  ) : IntentResult<FeeBreakdown> {
+    let intent = switch (state.intents.get(intent_id)) {
+      case null { return #err(#NotFound) };
+      case (?i) { i };
+    };
+
+    let quote = switch (intent.selected_quote) {
+      case null { return #err(#InternalError("No quote selected")) };
+      case (?q) { q };
+    };
+
+    // Transition to Fulfilled
+    let transitioned = State.transitionToFulfilled(intent, current_time);
+    let new_intent = switch (transitioned) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(i)) { i };
+    };
+
+    // Calculate fees
+    let fees = FeeManager.calculateFees(
+      quote.output_amount,
+      intent.protocol_fee_bps,
+      quote
+    );
+
+    // Release escrow
+    switch (Escrow.release(state.escrow, intent.user, intent.source.token, intent.escrow_balance)) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(())) {};
+    };
+
+    // Record protocol fee
+    FeeManager.recordProtocolFee(state.fee_manager, intent.destination.token, fees.protocol_fee);
+
+    let updated_intent = updateIntent(
+      new_intent,
+      ?#Fulfilled,
+      null,
+      null,
+      ?0,
+      null,
+      current_time
+    );
+
+    state.intents.put(intent_id, updated_intent);
+
+    // Log events
+    state.event_logger.emit(#IntentFulfilled({
+      intent_id = intent_id;
+      solver = quote.solver;
+      final_amount = fees.net_output;
+      protocol_fee = fees.protocol_fee;
+      timestamp = current_time;
+    }));
+
+    state.event_logger.emit(#EscrowReleased({
+      intent_id = intent_id;
+      recipient = quote.solver; // Released to solver
+      token = intent.source.token;
+      amount = intent.escrow_balance;
+      timestamp = current_time;
+    }));
+
+    state.event_logger.emit(#FeeCollected({
+      intent_id = intent_id;
+      token = intent.destination.token;
+      amount = fees.protocol_fee;
+      collector = intent.user; // Placeholder - should be protocol principal
+      timestamp = current_time;
+    }));
+
+    Debug.print("IntentManager: Intent #" # Nat.toText(intent_id) # " fulfilled");
+    #ok(fees)
+  };
+
+  /// Cancel an intent
+  public func cancelIntent(
+    state : ManagerState,
+    intent_id : Nat,
+    user : Principal,
+    current_time : Time.Time
+  ) : IntentResult<()> {
+    let intent = switch (state.intents.get(intent_id)) {
+      case null { return #err(#NotFound) };
+      case (?i) { i };
+    };
+
+    // Check authorization
+    if (intent.user != user) {
+      return #err(#NotIntentCreator);
+    };
+
+    // Transition to Cancelled
+    let transitioned = State.transitionToCancelled(intent);
+    let new_intent = switch (transitioned) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(i)) { i };
+    };
+
+    // Release escrow if any
+    if (intent.escrow_balance > 0) {
+      switch (Escrow.release(state.escrow, intent.user, intent.source.token, intent.escrow_balance)) {
+        case (#err(e)) { return #err(e) };
+        case (#ok(())) {};
+      };
+    };
+
+    let updated_intent = updateIntent(
+      new_intent,
+      ?#Cancelled,
+      null,
+      null,
+      ?0,
+      null,
+      current_time
+    );
+
+    state.intents.put(intent_id, updated_intent);
+
+    // Log event
+    state.event_logger.emit(#IntentCancelled({
+      intent_id = intent_id;
+      reason = "Cancelled by user";
+      timestamp = current_time;
+    }));
+
+    Debug.print("IntentManager: Intent #" # Nat.toText(intent_id) # " cancelled");
+    #ok(())
+  };
+
+  /// Get intent by ID
+  public func getIntent(state : ManagerState, id : Nat) : ?Intent {
+    state.intents.get(id)
+  };
+
+  /// Get user's intents
+  public func getUserIntents(state : ManagerState, user : Principal) : [Intent] {
+    let filtered = Array.filter<(Nat, Intent)>(
+      Iter.toArray(state.intents.entries()),
+      func((_, intent)) { intent.user == user }
+    );
+    Array.map<(Nat, Intent), Intent>(filtered, func((_, intent)) { intent })
+  };
+
+  /// Export state for upgrade
+  public func toStable(state : ManagerState) : StableManagerData {
+    {
+      intents = Iter.toArray(state.intents.entries());
+      next_id = state.next_id;
+      escrow = Escrow.toStable(state.escrow);
+      chain_registry = ChainRegistry.toStable(state.chain_registry);
+    }
+  };
+
+  /// Import state from upgrade
+  public func fromStable(data : StableManagerData, config : SystemConfig) : ManagerState {
+    let intents_map = HashMap.HashMap<Nat, Intent>(100, Nat.equal, Hash.hash);
+    for ((id, intent) in data.intents.vals()) {
+      intents_map.put(id, intent);
+    };
+
+    {
+      var intents = intents_map;
+      var next_id = data.next_id;
+      escrow = Escrow.fromStable(data.escrow);
+      fee_manager = FeeManager.init(); // Cannot restore from stable
+      chain_registry = ChainRegistry.fromStable(data.chain_registry);
+      event_logger = Events.EventLogger();
+      config = config;
+    }
+  };
+}
