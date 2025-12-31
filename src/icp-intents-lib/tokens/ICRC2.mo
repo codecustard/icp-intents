@@ -67,7 +67,8 @@ module {
           #ok(block_index)
         };
         case (#Err(#InsufficientFunds { balance })) {
-          #err(#InsufficientBalance("User balance: " # Nat.toText(balance)))
+          Debug.print("Insufficient funds. User balance: " # Nat.toText(balance));
+          #err(#InsufficientBalance)
         };
         case (#Err(#InsufficientAllowance { allowance })) {
           #err(#InvalidAmount("Insufficient allowance: " # Nat.toText(allowance) # " < " # Nat.toText(amount)))
@@ -131,7 +132,8 @@ module {
           #ok(block_index)
         };
         case (#Err(#InsufficientFunds { balance })) {
-          #err(#InsufficientBalance("Canister balance: " # Nat.toText(balance)))
+          Debug.print("Insufficient funds. Canister balance: " # Nat.toText(balance));
+          #err(#InsufficientBalance)
         };
         case (#Err(#BadFee { expected_fee })) {
           #err(#InvalidAmount("Bad fee, expected: " # Nat.toText(expected_fee)))

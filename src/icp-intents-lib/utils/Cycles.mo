@@ -27,7 +27,7 @@ module {
   public let ECDSA_SIGNING_COST : Nat = 30_000_000_000; // 30B cycles
   public let ECDSA_PUBKEY_COST : Nat = 10_000_000_000; // 10B cycles
   public let HTTP_OUTCALL_COST : Nat = 230_000_000_000; // 230B cycles
-  public let INTERCANISTER_CALL_COST : Nat = 1_000_000_000; // 1B cycles per call
+  public let INTERCANISTER_CALL_COST : Nat = 1_000_000; // 1M cycles per call (reduced for local testing)
   public let COMPUTE_COST : Nat = 1_000_000; // 1M cycles per operation
 
   /// Get current cycle balance
@@ -65,7 +65,11 @@ module {
 
   /// Check if sufficient cycles for operation
   public func hasSufficientCycles(required : Nat) : Bool {
-    available() >= required
+    // In local development, available() may return 0
+    // So we also check the balance as a fallback
+    let avail = available();
+    let bal = balance();
+    (avail >= required) or (bal >= required)
   };
 
   /// Estimate cycles needed for ECDSA operations

@@ -74,6 +74,32 @@ persistent actor SimpleIntentPool {
   // Initialize on deployment
   initializeChains();
 
+  // Token Management Functions
+
+  /// Register a token ledger
+  public shared({ caller = _ }) func registerToken(
+    symbol : Text,
+    ledger_principal : Principal,
+    decimals : Nat8,
+    fee : Nat
+  ) : async () {
+    // TODO: Add admin check
+    IntentLib.registerToken(state, symbol, ledger_principal, decimals, fee);
+    Debug.print("Registered token: " # symbol # " -> " # Principal.toText(ledger_principal));
+  };
+
+  /// Get token ledger principal
+  public query func getTokenLedger(symbol : Text) : async ?Principal {
+    IntentLib.getTokenLedger(state, symbol)
+  };
+
+  /// Deposit tokens from user to canister (after quote confirmation)
+  /// User must have already called approve() on the token ledger
+  public shared func depositTokens(intent_id : Nat) : async IntentLib.IntentResult<Nat> {
+    let canister_principal = Principal.fromActor(SimpleIntentPool);
+    await IntentLib.depositTokens(state, intent_id, canister_principal, Time.now())
+  };
+
   /// Create a new intent
   ///
   /// Example: Swap 1 ETH on Ethereum for at least 50 HOO on Hoosat
@@ -279,12 +305,12 @@ persistent actor SimpleIntentPool {
 
   /// Fulfill an intent (after solver delivers on dest chain)
   public shared func fulfillIntent(intent_id : Nat) : async IntentLib.IntentResult<IntentLib.FeeBreakdown> {
-    IntentLib.fulfillIntent(state, intent_id, Time.now())
+    await IntentLib.fulfillIntent(state, intent_id, Time.now())
   };
 
   /// Cancel an intent
   public shared({ caller }) func cancelIntent(intent_id : Nat) : async IntentLib.IntentResult<()> {
-    IntentLib.cancelIntent(state, intent_id, caller, Time.now())
+    await IntentLib.cancelIntent(state, intent_id, caller, Time.now())
   };
 
   // Query Functions

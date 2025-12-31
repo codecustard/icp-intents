@@ -136,8 +136,8 @@ module {
     state : ManagerState,
     intent_id : Nat,
     current_time : Time.Time
-  ) : IntentResult<FeeBreakdown> {
-    IntentManager.fulfillIntent(state, intent_id, current_time)
+  ) : async IntentResult<FeeBreakdown> {
+    await IntentManager.fulfillIntent(state, intent_id, current_time)
   };
 
   /// Cancel an intent
@@ -146,8 +146,8 @@ module {
     intent_id : Nat,
     user : Principal,
     current_time : Time.Time
-  ) : IntentResult<()> {
-    IntentManager.cancelIntent(state, intent_id, user, current_time)
+  ) : async IntentResult<()> {
+    await IntentManager.cancelIntent(state, intent_id, user, current_time)
   };
 
   /// Get intent by ID
@@ -185,6 +185,35 @@ module {
   /// List all supported chains
   public func listChains(state : ManagerState) : [Text] {
     ChainRegistry.listChains(state.chain_registry)
+  };
+
+  // Token Management Functions
+
+  /// Register a token ledger
+  public func registerToken(
+    state : ManagerState,
+    symbol : Text,
+    ledger_principal : Principal,
+    decimals : Nat8,
+    fee : Nat
+  ) {
+    IntentManager.registerToken(state, symbol, ledger_principal, decimals, fee)
+  };
+
+  /// Get ledger principal for a token
+  public func getTokenLedger(state : ManagerState, symbol : Text) : ?Principal {
+    IntentManager.getTokenLedger(state, symbol)
+  };
+
+  /// Deposit tokens from user to canister
+  /// User must have already called approve() on the token ledger
+  public func depositTokens(
+    state : ManagerState,
+    intent_id : Nat,
+    canister_principal : Principal,
+    current_time : Time.Time
+  ) : async IntentResult<Nat> {
+    await IntentManager.depositTokens(state, intent_id, canister_principal, current_time)
   };
 
   // Escrow Functions

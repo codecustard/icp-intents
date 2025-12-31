@@ -18,6 +18,8 @@ import Events "../core/Events";
 import ChainRegistry "../chains/ChainRegistry";
 import Escrow "../managers/Escrow";
 import FeeManager "../managers/FeeManager";
+import TokenRegistry "../tokens/TokenRegistry";
+import ICRC2 "../tokens/ICRC2";
 import Validation "../utils/Validation";
 
 module {
@@ -37,6 +39,7 @@ module {
     escrow : Escrow.EscrowState;
     fee_manager : FeeManager.FeeState;
     chain_registry : ChainRegistry.RegistryState;
+    token_registry : TokenRegistry.RegistryState;
     event_logger : Events.EventLogger;
     config : SystemConfig;
   };
@@ -47,6 +50,7 @@ module {
     next_id : Nat;
     escrow : Escrow.StableEscrowData;
     chain_registry : ChainRegistry.StableRegistryData;
+    token_registry : TokenRegistry.StableRegistryData;
   };
 
   /// Hash function for intent IDs (sequential Nat values)
@@ -64,6 +68,7 @@ module {
       escrow = Escrow.init();
       fee_manager = FeeManager.init();
       chain_registry = ChainRegistry.init();
+      token_registry = TokenRegistry.init();
       event_logger = Events.EventLogger();
       config = config;
     }
@@ -416,7 +421,7 @@ module {
     state : ManagerState,
     intent_id : Nat,
     current_time : Time.Time
-  ) : IntentResult<FeeBreakdown> {
+  ) : async IntentResult<FeeBreakdown> {
     let intent = switch (state.intents.get(intent_id)) {
       case null { return #err(#NotFound) };
       case (?i) { i };
@@ -441,7 +446,18 @@ module {
       quote
     );
 
-    // Release escrow
+    // Transfer tokens to solver (destination tokens)
+    switch (await releaseToSolver(state, intent, quote.solver, fees.net_output)) {
+      case (#err(e)) {
+        Debug.print("Failed to release tokens to solver: " # debug_show(e));
+        return #err(e);
+      };
+      case (#ok(_block_index)) {
+        Debug.print("Released " # Nat.toText(fees.net_output) # " " # intent.destination.token # " to solver");
+      };
+    };
+
+    // Release escrow (internal accounting)
     switch (Escrow.release(state.escrow, intent.user, intent.source.token, intent.escrow_balance)) {
       case (#err(e)) { return #err(e) };
       case (#ok(())) {};
@@ -497,7 +513,7 @@ module {
     intent_id : Nat,
     user : Principal,
     current_time : Time.Time
-  ) : IntentResult<()> {
+  ) : async IntentResult<()> {
     let intent = switch (state.intents.get(intent_id)) {
       case null { return #err(#NotFound) };
       case (?i) { i };
@@ -515,8 +531,20 @@ module {
       case (#ok(i)) { i };
     };
 
-    // Release escrow if any
+    // Refund tokens to user if deposited
     if (intent.escrow_balance > 0) {
+      // Transfer tokens back to user
+      switch (await refundToUser(state, intent)) {
+        case (#err(e)) {
+          Debug.print("Failed to refund tokens to user: " # debug_show(e));
+          return #err(e);
+        };
+        case (#ok(_block_index)) {
+          Debug.print("Refunded " # Nat.toText(intent.escrow_balance) # " " # intent.source.token # " to user");
+        };
+      };
+
+      // Release escrow (internal accounting)
       switch (Escrow.release(state.escrow, intent.user, intent.source.token, intent.escrow_balance)) {
         case (#err(e)) { return #err(e) };
         case (#ok(())) {};
@@ -560,6 +588,118 @@ module {
     Array.map<(Nat, Intent), Intent>(filtered, func((_, intent)) { intent })
   };
 
+  // Token Management Functions
+
+  /// Register a token ledger
+  public func registerToken(
+    state : ManagerState,
+    symbol : Text,
+    ledger_principal : Principal,
+    decimals : Nat8,
+    fee : Nat
+  ) {
+    TokenRegistry.registerToken(state.token_registry, symbol, ledger_principal, decimals, fee)
+  };
+
+  /// Get ledger principal for a token
+  public func getTokenLedger(state : ManagerState, symbol : Text) : ?Principal {
+    TokenRegistry.getLedger(state.token_registry, symbol)
+  };
+
+  /// Deposit tokens from user to canister (after quote confirmation)
+  /// User must have already called approve() on the token ledger
+  public func depositTokens(
+    state : ManagerState,
+    intent_id : Nat,
+    canister_principal : Principal,
+    current_time : Time.Time
+  ) : async IntentResult<Nat> {
+    let intent = switch (state.intents.get(intent_id)) {
+      case null { return #err(#NotFound) };
+      case (?i) { i };
+    };
+
+    // Can only deposit if quote is confirmed
+    if (intent.status != #Confirmed) {
+      return #err(#InvalidStatus("Intent must be in Confirmed status to deposit"));
+    };
+
+    // Get token ledger
+    let ledger_principal = switch (TokenRegistry.getLedger(state.token_registry, intent.source.token)) {
+      case null {
+        return #err(#InvalidToken("Token not registered: " # intent.source.token));
+      };
+      case (?ledger) { ledger };
+    };
+
+    // Transfer tokens from user to canister using ICRC-2 transferFrom
+    switch (await ICRC2.depositFrom(
+      ledger_principal,
+      intent.user,
+      canister_principal,
+      intent.source_amount,
+      null // No memo
+    )) {
+      case (#err(e)) { #err(e) };
+      case (#ok(block_index)) {
+        // Mark intent as deposited
+        switch (markDeposited(state, intent_id, intent.source_amount, current_time)) {
+          case (#err(e)) { #err(e) };
+          case (#ok(())) {
+            Debug.print("Deposited " # Nat.toText(intent.source_amount) # " " # intent.source.token # " for intent " # Nat.toText(intent_id));
+            #ok(block_index)
+          };
+        }
+      };
+    }
+  };
+
+  /// Release tokens to solver on fulfillment
+  func releaseToSolver(
+    state : ManagerState,
+    intent : Intent,
+    solver : Principal,
+    amount : Nat
+  ) : async IntentResult<Nat> {
+    // Get token ledger
+    let ledger_principal = switch (TokenRegistry.getLedger(state.token_registry, intent.destination.token)) {
+      case null {
+        return #err(#InvalidToken("Destination token not registered: " # intent.destination.token));
+      };
+      case (?ledger) { ledger };
+    };
+
+    // Transfer tokens from canister to solver
+    await ICRC2.transferTo(
+      ledger_principal,
+      solver,
+      amount,
+      ?Text.encodeUtf8("Intent #" # Nat.toText(intent.id) # " solver payout")
+    )
+  };
+
+  /// Refund tokens to user on cancellation
+  func refundToUser(
+    state : ManagerState,
+    intent : Intent
+  ) : async IntentResult<Nat> {
+    // Get token ledger
+    let ledger_principal = switch (TokenRegistry.getLedger(state.token_registry, intent.source.token)) {
+      case null {
+        return #err(#InvalidToken("Source token not registered: " # intent.source.token));
+      };
+      case (?ledger) { ledger };
+    };
+
+    // Transfer tokens from canister back to user
+    await ICRC2.transferTo(
+      ledger_principal,
+      intent.user,
+      intent.escrow_balance,
+      ?Text.encodeUtf8("Intent #" # Nat.toText(intent.id) # " refund")
+    )
+  };
+
   /// Export state for upgrade
   public func toStable(state : ManagerState) : StableManagerData {
     {
@@ -567,6 +707,7 @@ module {
       next_id = state.next_id;
       escrow = Escrow.toStable(state.escrow);
       chain_registry = ChainRegistry.toStable(state.chain_registry);
+      token_registry = TokenRegistry.toStable(state.token_registry);
     }
   };
 
@@ -583,6 +724,7 @@ module {
       escrow = Escrow.fromStable(data.escrow);
       fee_manager = FeeManager.init(); // Cannot restore from stable
       chain_registry = ChainRegistry.fromStable(data.chain_registry);
+      token_registry = TokenRegistry.fromStable(data.token_registry);
       event_logger = Events.EventLogger();
       config = config;
     }
