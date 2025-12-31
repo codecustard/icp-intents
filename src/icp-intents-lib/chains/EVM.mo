@@ -226,12 +226,18 @@ module {
     }
   };
 
+  /// Calculate confirmations from block numbers (public for testing)
+  public func calculateConfirmations(currentBlock : Nat, txBlock : Nat) : Nat {
+    if (currentBlock >= txBlock) {
+      (currentBlock - txBlock) + 1
+    } else {
+      0
+    }
+  };
+
   /// Verify EVM deposit transaction
   public func verify(config : Config, request : VerificationRequest) : async VerificationResult {
-    // Check cycles
-    if (not Cycles.hasSufficientCycles(Cycles.HTTP_OUTCALL_COST * 2)) {
-      return #Failed("Insufficient cycles for RPC calls");
-    };
+    // Note: Cycles are provided with each RPC call via the EVM RPC canister
 
     let proof = switch (request.proof) {
       case (#EVM(evm_proof)) { evm_proof };
@@ -285,8 +291,40 @@ module {
         case null { null };
       };
 
+      // Get current block number to calculate confirmations
+      let block_request = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}";
+      let block_response = await rpc.multi_request(
+        rpc_services,
+        ?{ responseSizeEstimate = ?200 },
+        block_request
+      );
+
+      let current_block = switch (extractJsonString(block_response)) {
+        case (?json) {
+          // Parse "result":"0x..." from JSON
+          let parts = Iter.toArray(Text.split(json, #text "\"result\":\""));
+          if (parts.size() < 2) {
+            return #Failed("Could not parse current block number");
+          };
+          let afterResult = parts[1];
+          let resultParts = Iter.toArray(Text.split(afterResult, #text "\""));
+          if (resultParts.size() < 1) {
+            return #Failed("Could not extract block number");
+          };
+          switch (hexToNat(resultParts[0])) {
+            case (?n) { n };
+            case null {
+              return #Failed("Invalid block number format");
+            };
+          }
+        };
+        case null {
+          return #Failed("Failed to get current block number");
+        };
+      };
+
       // Validate the transaction
-      return validateTransaction(receipt, tx_value, request.expected_address, request.expected_amount, proof.tx_hash)
+      return validateTransaction(receipt, tx_value, request.expected_address, request.expected_amount, proof.tx_hash, current_block, config.min_confirmations)
     } catch (e) {
       #Failed("RPC call failed: " # Error.message(e))
     }
@@ -298,7 +336,9 @@ module {
     tx_value : ?Nat,
     expected_address : Text,
     expected_amount : Nat,
-    tx_hash : Text
+    tx_hash : Text,
+    current_block : Nat,
+    min_confirmations : Nat
   ) : VerificationResult {
     // Check transaction status
     let status = switch (receipt.status) {
@@ -337,11 +377,24 @@ module {
       return #Failed("Insufficient amount: " # Nat.toText(actual_value) # " < " # Nat.toText(expected_amount));
     };
 
-    // Success!
+    // Calculate confirmations
+    let confirmations = calculateConfirmations(current_block, receipt.blockNumber);
+
+    Debug.print("EVM: Confirmations: " # Nat.toText(confirmations) # " / " # Nat.toText(min_confirmations));
+
+    // Check if we have enough confirmations
+    if (confirmations < min_confirmations) {
+      return #Pending({
+        current_confirmations = confirmations;
+        required_confirmations = min_confirmations;
+      });
+    };
+
+    // Success with actual confirmations!
     #Success({
       verified_amount = actual_value;
       tx_hash = tx_hash;
-      confirmations = receipt.blockNumber; // Using block number as proxy
+      confirmations = confirmations;
       timestamp = 0; // Should be set by caller with Time.now()
     })
   };

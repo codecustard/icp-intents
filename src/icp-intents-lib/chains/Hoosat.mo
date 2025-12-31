@@ -70,7 +70,7 @@ module {
     actor ("aaaaa-aa")
   };
 
-  /// Extract JSON field value
+  /// Extract JSON field value (string)
   func extractJsonField(json : Text, field : Text) : ?Text {
     let pattern = "\"" # field # "\":\"";
     let parts = Text.split(json, #text pattern);
@@ -84,6 +84,57 @@ module {
         valueParts.next()
       };
     }
+  };
+
+  /// Extract first element from JSON array field
+  func extractJsonArrayFirst(json : Text, field : Text) : ?Text {
+    let pattern = "\"" # field # "\":[\"";
+    let parts = Text.split(json, #text pattern);
+    let iter = parts;
+    ignore iter.next();
+
+    switch (iter.next()) {
+      case null { null };
+      case (?afterField) {
+        let valueParts = Text.split(afterField, #text "\"");
+        valueParts.next()
+      };
+    }
+  };
+
+  /// Extract numeric field from JSON (not quoted)
+  func extractNumericField(json : Text, field : Text) : ?Nat {
+    let pattern = "\"" # field # "\":";
+    let parts = Text.split(json, #text pattern);
+    let iter = parts;
+    ignore iter.next();
+
+    switch (iter.next()) {
+      case null { null };
+      case (?afterField) {
+        // Extract the number before the next comma, }, or whitespace
+        var numStr = "";
+        for (c in afterField.chars()) {
+          if (c == ',' or c == '}' or c == ' ' or c == '\n' or c == '\r') {
+            if (numStr.size() > 0) {
+              return parseNat(numStr);
+            };
+          };
+          numStr #= Text.fromChar(c);
+        };
+        // End of string
+        if (numStr.size() > 0) {
+          parseNat(numStr)
+        } else {
+          null
+        }
+      };
+    }
+  };
+
+  /// Extract daaScore from JSON (wrapper for extractNumericField)
+  func extractDaaScore(json : Text) : ?Nat {
+    extractNumericField(json, "daaScore")
   };
 
   /// Parse Nat from text
@@ -114,12 +165,18 @@ module {
     parts.size() > 1
   };
 
+  /// Calculate confirmations from block heights (public for testing)
+  public func calculateConfirmations(currentHeight : Nat, txHeight : Nat) : Nat {
+    if (currentHeight >= txHeight) {
+      (currentHeight - txHeight) + 1
+    } else {
+      0
+    }
+  };
+
   /// Verify Hoosat UTXO deposit
   public func verify(config : Config, request : VerificationRequest) : async VerificationResult {
-    // Check cycles
-    if (not Cycles.hasSufficientCycles(Cycles.HTTP_OUTCALL_COST)) {
-      return #Failed("Insufficient cycles for HTTP outcall");
-    };
+    // Note: Cycles are provided with each HTTP outcall using 'with cycles = X'
 
     let proof = switch (request.proof) {
       case (#UTXO(utxo_proof)) { utxo_proof };
@@ -199,11 +256,193 @@ module {
         return #Failed("Insufficient amount: " # Nat.toText(amount) # " < " # Nat.toText(request.expected_amount));
       };
 
-      // Success!
+      // Get transaction details to check confirmations
+      let txUrl = config.rpc_url # "/transactions/" # proof.tx_id;
+      Debug.print("Hoosat: Fetching transaction details from " # txUrl);
+
+      let txResponse = await (with cycles = Cycles.HTTP_OUTCALL_COST) management.http_request({
+        url = txUrl;
+        max_response_bytes = ?65536; // 64KB for large transactions
+        method = #get;
+        headers = [{
+          name = "Accept";
+          value = "application/json";
+        }];
+        body = null;
+        transform = null;
+        is_replicated = ?false;
+      });
+
+      if (txResponse.status != 200) {
+        return #Failed("Failed to fetch transaction details: " # Nat.toText(txResponse.status));
+      };
+
+      let txResponseText = switch (Text.decodeUtf8(txResponse.body)) {
+        case null { return #Failed("Invalid UTF-8 in transaction response") };
+        case (?text) { text };
+      };
+
+      // Debug: show first 500 chars of response
+      let preview = if (txResponseText.size() > 500) {
+        let chars = txResponseText.chars();
+        var result = "";
+        var count = 0;
+        label l for (c in chars) {
+          if (count >= 500) break l;
+          result #= Text.fromChar(c);
+          count += 1;
+        };
+        result # "..."
+      } else {
+        txResponseText
+      };
+      Debug.print("Hoosat: TX response: " # preview);
+
+      // Extract block hash from transaction (Hoosat returns array of hashes due to DAG structure)
+      let blockHash = switch (extractJsonArrayFirst(txResponseText, "block_hash")) {
+        case null {
+          Debug.print("Hoosat: No block_hash found in transaction response");
+          // Transaction exists but not yet in a block
+          return #Pending({
+            current_confirmations = 0;
+            required_confirmations = config.min_confirmations;
+          });
+        };
+        case (?hash) {
+          Debug.print("Hoosat: Found block_hash: " # hash);
+          hash
+        };
+      };
+
+      // Get block details to find block height
+      let blockUrl = config.rpc_url # "/blocks/" # blockHash;
+      Debug.print("Hoosat: Fetching block details from " # blockUrl);
+
+      let blockResponse = await (with cycles = Cycles.HTTP_OUTCALL_COST) management.http_request({
+        url = blockUrl;
+        max_response_bytes = ?65536; // 64KB for large blocks
+        method = #get;
+        headers = [{
+          name = "Accept";
+          value = "application/json";
+        }];
+        body = null;
+        transform = null;
+        is_replicated = ?false;
+      });
+
+      if (blockResponse.status != 200) {
+        return #Failed("Failed to fetch block details: " # Nat.toText(blockResponse.status));
+      };
+
+      let blockResponseText = switch (Text.decodeUtf8(blockResponse.body)) {
+        case null { return #Failed("Invalid UTF-8 in block response") };
+        case (?text) { text };
+      };
+
+      // Debug: show first 500 chars of block response
+      let blockPreview = if (blockResponseText.size() > 500) {
+        let chars = blockResponseText.chars();
+        var result = "";
+        var count = 0;
+        label l2 for (c in chars) {
+          if (count >= 500) break l2;
+          result #= Text.fromChar(c);
+          count += 1;
+        };
+        result # "..."
+      } else {
+        blockResponseText
+      };
+      Debug.print("Hoosat: Block response: " # blockPreview);
+
+      // Extract block height (daaScore in Hoosat - it's a number not a string in JSON)
+      // Try to parse it from the response directly
+      let txBlockHeight = switch (extractDaaScore(blockResponseText)) {
+        case null {
+          Debug.print("Hoosat: Could not find 'daaScore' field");
+          return #Failed("Could not extract block height");
+        };
+        case (?height) {
+          Debug.print("Hoosat: Found daaScore: " # Nat.toText(height));
+          height
+        };
+      };
+
+      // Get current chain tip
+      let infoUrl = config.rpc_url # "/info/network";
+      Debug.print("Hoosat: Fetching chain info from " # infoUrl);
+
+      let infoResponse = await (with cycles = Cycles.HTTP_OUTCALL_COST) management.http_request({
+        url = infoUrl;
+        max_response_bytes = ?4096;
+        method = #get;
+        headers = [{
+          name = "Accept";
+          value = "application/json";
+        }];
+        body = null;
+        transform = null;
+        is_replicated = ?false;
+      });
+
+      if (infoResponse.status != 200) {
+        return #Failed("Failed to fetch chain info: " # Nat.toText(infoResponse.status));
+      };
+
+      let infoResponseText = switch (Text.decodeUtf8(infoResponse.body)) {
+        case null { return #Failed("Invalid UTF-8 in info response") };
+        case (?text) { text };
+      };
+
+      // Debug: show first 500 chars of info response
+      let infoPreview = if (infoResponseText.size() > 500) {
+        let chars = infoResponseText.chars();
+        var result = "";
+        var count = 0;
+        label l3 for (c in chars) {
+          if (count >= 500) break l3;
+          result #= Text.fromChar(c);
+          count += 1;
+        };
+        result # "..."
+      } else {
+        infoResponseText
+      };
+      Debug.print("Hoosat: Info response: " # infoPreview);
+
+      // Extract current block height (virtualDaaScore is a string field in the response)
+      let currentHeight = switch (extractJsonField(infoResponseText, "virtualDaaScore")) {
+        case (?heightStr) {
+          switch (parseNat(heightStr)) {
+            case null { return #Failed("Invalid virtualDaaScore format") };
+            case (?height) {
+              Debug.print("Hoosat: Current virtualDaaScore: " # Nat.toText(height));
+              height
+            };
+          }
+        };
+        case null { return #Failed("Could not extract virtualDaaScore") };
+      };
+
+      // Calculate confirmations (blocks since tx was mined + 1)
+      let confirmations = calculateConfirmations(currentHeight, txBlockHeight);
+
+      Debug.print("Hoosat: Confirmations: " # Nat.toText(confirmations) # " / " # Nat.toText(config.min_confirmations));
+
+      // Check if we have enough confirmations
+      if (confirmations < config.min_confirmations) {
+        return #Pending({
+          current_confirmations = confirmations;
+          required_confirmations = config.min_confirmations;
+        });
+      };
+
+      // Success with actual confirmations!
       #Success({
         verified_amount = amount;
         tx_hash = proof.tx_id;
-        confirmations = 10; // Default confirmations for Hoosat
+        confirmations = confirmations;
         timestamp = 0; // Should be set by caller
       })
     } catch (e) {
@@ -216,11 +455,6 @@ module {
     config : Config,
     context : AddressContext
   ) : async IntentResult<Text> {
-    // Check cycles
-    if (not Cycles.hasSufficientCycles(Cycles.ECDSA_PUBKEY_COST)) {
-      return #err(#InsufficientCycles);
-    };
-
     try {
       let derivation_path = TECDSA.createDerivationPath(context);
 
@@ -246,12 +480,6 @@ module {
     intent_id : Nat,
     key_name : Text
   ) : async IntentResult<Blob> {
-    // Check cycles for pubkey + signing
-    let required_cycles = Cycles.ECDSA_PUBKEY_COST + Cycles.ECDSA_SIGNING_COST;
-    if (not Cycles.hasSufficientCycles(required_cycles)) {
-      return #err(#InsufficientCycles);
-    };
-
     try {
       // Derive key path
       // Note: We need the user principal, but UTXO type doesn't store it
@@ -387,11 +615,6 @@ module {
     signed_tx : Blob,
     _rpc_url : ?Text
   ) : async IntentResult<Text> {
-    // Check cycles
-    if (not Cycles.hasSufficientCycles(Cycles.HTTP_OUTCALL_COST)) {
-      return #err(#InsufficientCycles);
-    };
-
     try {
       let management = managementCanister();
       let url = config.rpc_url # "/transactions";
