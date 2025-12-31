@@ -27,6 +27,7 @@ module {
   public let ECDSA_SIGNING_COST : Nat = 30_000_000_000; // 30B cycles
   public let ECDSA_PUBKEY_COST : Nat = 10_000_000_000; // 10B cycles
   public let HTTP_OUTCALL_COST : Nat = 230_000_000_000; // 230B cycles
+  public let INTERCANISTER_CALL_COST : Nat = 1_000_000_000; // 1B cycles per call
   public let COMPUTE_COST : Nat = 1_000_000; // 1M cycles per operation
 
   /// Get current cycle balance
