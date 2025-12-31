@@ -182,7 +182,7 @@ module {
   };
 
   /// Convert public key to Bitcoin address (P2PKH format)
-  func publicKeyToBitcoinAddress(pubkey : [Nat8], network : Text) : IntentResult<Text> {
+  func publicKeyToBitcoinAddress(_pubkey : [Nat8], _network : Text) : IntentResult<Text> {
     // This is a simplified version - production would use proper Bitcoin encoding
     // Including RIPEMD-160, Base58Check, etc.
 
@@ -191,7 +191,7 @@ module {
   };
 
   /// Convert public key to Hoosat address
-  func publicKeyToHoosatAddress(pubkey : [Nat8]) : IntentResult<Text> {
+  func publicKeyToHoosatAddress(_pubkey : [Nat8]) : IntentResult<Text> {
     // Hoosat address format - similar to Bitcoin but with different prefix
     // This would need proper implementation based on Hoosat specs
 

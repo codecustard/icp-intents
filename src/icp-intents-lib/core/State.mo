@@ -77,7 +77,7 @@ module {
   };
 
   /// Transition intent to Fulfilled status
-  public func transitionToFulfilled(intent : Intent, currentTime : Time.Time) : IntentResult<Intent> {
+  public func transitionToFulfilled(intent : Intent, _currentTime : Time.Time) : IntentResult<Intent> {
     // Fulfilled can happen from Deposited status
     switch (intent.status) {
       case (#Deposited) {

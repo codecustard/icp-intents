@@ -132,7 +132,7 @@ module {
   };
 
   /// Validate chain specification
-  public func validateChainSpec(spec : Types.ChainSpec, config : SystemConfig) : ?IntentError {
+  public func validateChainSpec(spec : Types.ChainSpec, _config : SystemConfig) : ?IntentError {
     if (Text.size(spec.chain) == 0) {
       return ?#InvalidChain("Chain name cannot be empty");
     };
@@ -176,22 +176,6 @@ module {
 
   func isHexChar(c : Char) : Bool {
     (c >= '0' and c <= '9') or (c >= 'a' and c <= 'f') or (c >= 'A' and c <= 'F')
-  };
-
-  func isChainSupported(chain : Text, config : SystemConfig) : Bool {
-    // Check if chain exists in supported chains
-    for (supportedChain in config.supported_chains.vals()) {
-      let chainText = switch (supportedChain) {
-        case (#EVM(evm)) { evm.name };
-        case (#Hoosat(_)) { "hoosat" };
-        case (#Bitcoin(_)) { "bitcoin" };
-        case (#Custom(c)) { c.name };
-      };
-      if (Text.equal(Text.toLowercase(chain), Text.toLowercase(chainText))) {
-        return true;
-      };
-    };
-    false
   };
 
   func checkAllowlist(principal : Principal, allowlist : [Principal]) : Bool {

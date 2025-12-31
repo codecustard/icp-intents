@@ -356,12 +356,12 @@ module {
 
   /// Build EVM transaction (for reverse flow - ICP → EVM)
   public func buildTransaction(
-    config : Config,
-    utxo : Types.UTXO,
-    recipient : Text,
-    amount : Nat,
-    intent_id : Nat,
-    key_name : Text
+    _config : Config,
+    _utxo : Types.UTXO,
+    _recipient : Text,
+    _amount : Nat,
+    _intent_id : Nat,
+    _key_name : Text
   ) : async IntentResult<Blob> {
     // EVM transaction building would require:
     // 1. Get nonce from RPC
@@ -374,9 +374,9 @@ module {
 
   /// Broadcast EVM transaction
   public func broadcast(
-    config : Config,
-    signed_tx : Blob,
-    rpc_url : ?Text
+    _config : Config,
+    _signed_tx : Blob,
+    _rpc_url : ?Text
   ) : async IntentResult<Text> {
     // Would use eth_sendRawTransaction
     #err(#InternalError("EVM transaction broadcast not yet implemented"))

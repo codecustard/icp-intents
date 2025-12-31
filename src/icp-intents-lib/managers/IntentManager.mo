@@ -8,18 +8,17 @@ import HashMap "mo:base/HashMap";
 import Hash "mo:base/Hash";
 import Iter "mo:base/Iter";
 import Nat "mo:base/Nat";
+import Nat32 "mo:base/Nat32";
 import Text "mo:base/Text";
 import Debug "mo:base/Debug";
 import Array "mo:base/Array";
 import Types "../core/Types";
 import State "../core/State";
-import Errors "../core/Errors";
 import Events "../core/Events";
 import ChainRegistry "../chains/ChainRegistry";
 import Escrow "../managers/Escrow";
 import FeeManager "../managers/FeeManager";
 import Validation "../utils/Validation";
-import Math "../utils/Math";
 
 module {
   type Intent = Types.Intent;
@@ -50,10 +49,17 @@ module {
     chain_registry : ChainRegistry.StableRegistryData;
   };
 
+  /// Hash function for intent IDs (sequential Nat values)
+  func intentIdHash(id : Nat) : Hash.Hash {
+    // For sequential IDs, use a simple modulo hash
+    // This is efficient and avoids deprecation warning for Hash.hash
+    Nat32.fromNat(id % 4294967295)
+  };
+
   /// Initialize manager
   public func init(config : SystemConfig) : ManagerState {
     {
-      var intents = HashMap.HashMap<Nat, Intent>(100, Nat.equal, Hash.hash);
+      var intents = HashMap.HashMap<Nat, Intent>(100, Nat.equal, intentIdHash);
       var next_id = 0;
       escrow = Escrow.init();
       fee_manager = FeeManager.init();
@@ -71,7 +77,7 @@ module {
     selected_quote : ??Quote,
     escrow_balance : ?Nat,
     verified_at : ??Time.Time,
-    updated_at : Time.Time
+    _updated_at : Time.Time
   ) : Intent {
     {
       id = base.id;
@@ -566,7 +572,7 @@ module {
 
   /// Import state from upgrade
   public func fromStable(data : StableManagerData, config : SystemConfig) : ManagerState {
-    let intents_map = HashMap.HashMap<Nat, Intent>(100, Nat.equal, Hash.hash);
+    let intents_map = HashMap.HashMap<Nat, Intent>(100, Nat.equal, intentIdHash);
     for ((id, intent) in data.intents.vals()) {
       intents_map.put(id, intent);
     };

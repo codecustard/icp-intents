@@ -9,12 +9,11 @@ import Hoosat "../../src/icp-intents-lib/chains/Hoosat";
 import Principal "mo:base/Principal";
 import Time "mo:base/Time";
 import Debug "mo:base/Debug";
-import Array "mo:base/Array";
 
 persistent actor SimpleIntentPool {
 
   /// Stable storage for upgrades
-  stable var stable_data : ?IntentLib.StableManagerData = null;
+  var stable_data : ?IntentLib.StableManagerData = null;
 
   /// System configuration
   transient let config : IntentLib.SystemConfig = {
@@ -352,11 +351,11 @@ persistent actor SimpleIntentPool {
   // Admin Functions
 
   /// Register a new chain (admin only)
-  public shared({ caller }) func registerChain(
+  public shared({ caller = _ }) func registerChain(
     name : Text,
     chain : IntentLib.Chain
   ) : async () {
-    // TODO: Add admin check
+    // TODO: Add admin check using caller
     IntentLib.registerChain(state, name, chain);
   };
 

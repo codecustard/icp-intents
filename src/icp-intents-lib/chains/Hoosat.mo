@@ -239,7 +239,7 @@ module {
 
   /// Build and sign Hoosat transaction
   public func buildTransaction(
-    config : Config,
+    _config : Config,
     utxo : UTXO,
     recipient : Text,
     amount : Nat,
