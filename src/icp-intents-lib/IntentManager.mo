@@ -243,6 +243,7 @@ module {
       fee = request.fee;
       expiry = request.expiry;
       submitted_at = currentTime;
+      solver_dest_address = request.solver_dest_address;
     };
 
     // Add quote to intent
@@ -317,16 +318,40 @@ module {
     // Calculate total escrow needed (source_amount + solver fee)
     let totalEscrow = intent.source_amount + selectedQuote.fee;
 
-    // Lock funds in escrow
-    let lockResult = Escrow.lock(state.escrow, caller, intent.source.token, totalEscrow);
-    switch (lockResult) {
-      case (#err(e)) { return #err(e) };
-      case (#ok(_)) {};
+    // Lock funds in escrow ONLY if source is ICP-based (not UTXO chains)
+    // For UTXO chains (Hoosat, Bitcoin, Kaspa), user deposits directly to generated address
+    let isUtxoSource = Text.equal(intent.source.chain, "hoosat") or
+                       Text.equal(intent.source.chain, "bitcoin") or
+                       Text.equal(intent.source.chain, "kaspa");
+
+    if (not isUtxoSource) {
+      // Lock funds for ICP-based source tokens
+      let lockResult = Escrow.lock(state.escrow, caller, intent.source.token, totalEscrow);
+      switch (lockResult) {
+        case (#err(e)) { return #err(e) };
+        case (#ok(_)) {};
+      };
     };
 
-    // Generate deposit address based on destination chain
-    let addressResult = if (Text.equal(intent.destination.chain, "hoosat")) {
-      // Generate Hoosat address using HoosatVerification
+    // Generate deposit address based on chain type
+    // - If source is UTXO (Hoosat), generate Hoosat address for user to deposit to
+    // - If destination is UTXO (Hoosat), generate Hoosat address for solver to deposit to
+    let addressResult = if (isUtxoSource) {
+      // Source is UTXO - generate address on source chain for user to deposit
+      if (Text.equal(intent.source.chain, "hoosat")) {
+        let hoosatConfig : HoosatVerification.HoosatConfig = {
+          rpc_url = ""; // Not needed for address generation
+          network = intent.source.network;
+          confirmations = 10;
+          ecdsa_key_name = state.tecdsaConfig.key_name;
+        };
+        await HoosatVerification.generateDepositAddress(intentId, hoosatConfig)
+      } else {
+        // Other UTXO chains (Bitcoin, Kaspa, etc.)
+        #err(#InternalError("UTXO chain not yet supported: " # intent.source.chain))
+      }
+    } else if (Text.equal(intent.destination.chain, "hoosat")) {
+      // Destination is Hoosat - generate Hoosat address for solver to deposit
       let hoosatConfig : HoosatVerification.HoosatConfig = {
         rpc_url = ""; // Not needed for address generation
         network = intent.destination.network;
@@ -335,7 +360,7 @@ module {
       };
       await HoosatVerification.generateDepositAddress(intentId, hoosatConfig)
     } else {
-      // Default to Ethereum address generation
+      // Default to Ethereum address generation (for EVM destinations)
       await TECDSA.deriveAddress(
         state.tecdsaConfig,
         intentId,
@@ -346,8 +371,10 @@ module {
     let generatedAddress = switch (addressResult) {
       case (#ok(addr)) addr;
       case (#err(e)) {
-        // Rollback escrow lock
-        ignore Escrow.unlock(state.escrow, caller, intent.source.token, totalEscrow);
+        // Rollback escrow lock (only if we actually locked)
+        if (not isUtxoSource) {
+          ignore Escrow.unlock(state.escrow, caller, intent.source.token, totalEscrow);
+        };
         return #err(e);
       };
     };
@@ -357,7 +384,7 @@ module {
       intent with
       status = #Locked;
       selected_quote = ?selectedQuote;
-      escrow_balance = totalEscrow;
+      escrow_balance = if (isUtxoSource) { 0 } else { totalEscrow }; // UTXO chains have no escrow
       generated_address = ?generatedAddress;
     };
 

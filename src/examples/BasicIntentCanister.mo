@@ -385,6 +385,124 @@ shared(init_msg) persistent actor class BasicIntentCanister() = self {
     };
   };
 
+  /// Release Hoosat funds to solver (reverse flow: user deposits Hoosat → solver provides ICP)
+  /// This is called after:
+  /// 1. User deposits Hoosat to canister-generated address
+  /// 2. Solver provides ICP to user
+  /// 3. Canister builds and broadcasts Hoosat transaction to solver
+  public shared func releaseHoosatToSolver(
+    intentId: Nat,
+    userTxHash: Text
+  ) : async IntentResult<Text> {
+    let currentTime = Time.now();
+
+    // Get intent
+    let intent = switch (IntentManager.getIntent(intentState, intentId)) {
+      case (?i) { i };
+      case null { return #err(#NotFound) };
+    };
+
+    // Verify intent is for Hoosat source
+    if (intent.source.chain != "hoosat") {
+      return #err(#InvalidChain);
+    };
+
+    // Verify intent has selected quote with solver address
+    let selectedQuote = switch (intent.selected_quote) {
+      case null { return #err(#InvalidStatus("No quote selected")) };
+      case (?quote) { quote };
+    };
+
+    let solverDestAddress = switch (selectedQuote.solver_dest_address) {
+      case null { return #err(#InvalidAddress) };
+      case (?addr) { addr };
+    };
+
+    // STEP 1: Verify user's Hoosat deposit
+    let hoosatConfig : HoosatVerification.HoosatConfig = {
+      rpc_url = "https://api.network.hoosat.fi";
+      network = intent.source.network;
+      confirmations = 10;
+      ecdsa_key_name = tecdsaConfig.key_name;
+    };
+
+    let depositAddress = switch (intent.generated_address) {
+      case null { return #err(#InvalidAddress) };
+      case (?addr) { addr };
+    };
+
+    let verifyRequest : HoosatVerification.HoosatVerificationRequest = {
+      tx_id = userTxHash;
+      expected_address = depositAddress;
+      expected_amount = intent.source_amount;
+      output_index = 0;
+    };
+
+    let utxo = switch (await (with cycles = 230_000_000_000) HoosatVerification.verifyUTXO(verifyRequest, hoosatConfig)) {
+      case (#Success(u)) { u };
+      case (#Failed(msg)) {
+        return #err(#VerificationFailed("User Hoosat deposit verification failed: " # msg));
+      };
+    };
+
+    Debug.print("✓ Verified user deposited " # Nat.toText(utxo.amount) # " hootas");
+
+    // STEP 2: TODO - Verify solver provided ICP to user
+    // For now, we trust the solver has sent ICP
+    // In production, you'd verify the ICP transfer here
+
+    // STEP 3: Build and sign Hoosat transaction to solver
+    Debug.print("Building Hoosat transaction to solver: " # solverDestAddress);
+
+    // Transaction fee (must match HoosatVerification.buildAndSignTransaction)
+    let txFee = 2000;
+
+    // Check minimum amount
+    if (utxo.amount < txFee + 1000) {
+      return #err(#InsufficientBalance);
+    };
+
+    // Amount to send = deposited amount - transaction fee
+    let amountToSend = utxo.amount - txFee;
+
+    let signedTx = switch (await HoosatVerification.buildAndSignTransaction(
+      utxo,
+      solverDestAddress,
+      amountToSend, // Send deposited amount minus fee
+      intentId,
+      hoosatConfig
+    )) {
+      case (#ok(tx)) { tx };
+      case (#err(e)) { return #err(e) };
+    };
+
+    Debug.print("✓ Built and signed Hoosat transaction (sending " # Nat.toText(amountToSend) # " hootas + " # Nat.toText(txFee) # " fee)");
+
+    // STEP 4: Broadcast transaction to Hoosat network
+    Debug.print("Broadcasting Hoosat transaction...");
+
+    let txHash = switch (await HoosatVerification.broadcastTransaction(signedTx, hoosatConfig)) {
+      case (#ok(hash)) { hash };
+      case (#err(e)) { return #err(e) };
+    };
+
+    Debug.print("✓ Broadcast successful: " # txHash);
+
+    // STEP 5: Mark intent as fulfilled
+    let finalizeResult = IntentManager.finalizeFulfillment(
+      intentState,
+      intentId,
+      #Success({ amount = amountToSend; tx_hash = txHash }),
+      txHash,
+      currentTime
+    );
+
+    switch (finalizeResult) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(())) { #ok(txHash) };
+    };
+  };
+
   /// Get intents where solver has submitted quotes
   public query(msg) func getMySolverIntents() : async [Intent] {
     IntentManager.getSolverIntents(intentState, msg.caller)

@@ -59,6 +59,7 @@ module {
     fee: Nat;            /// Solver's fee in source token units
     expiry: Time.Time;   /// Quote valid until this timestamp
     submitted_at: Time.Time;
+    solver_dest_address: ?Text; /// Where solver wants to receive source tokens (for reverse flow)
   };
 
   /// Main intent structure (fully extensible for any chain pair!)
@@ -218,5 +219,6 @@ module {
     output_amount: Nat;
     fee: Nat;
     expiry: Time.Time;
+    solver_dest_address: ?Text; /// Where solver wants to receive source tokens (optional)
   };
 }

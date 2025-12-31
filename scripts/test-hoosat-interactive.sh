@@ -68,6 +68,7 @@ dfx canister call BasicIntentCanister submitQuote "(record {
   output_amount = 60_000_000 : nat;
   fee = 10_000 : nat;
   expiry = ${EXPIRY_NS} : int;
+  solver_dest_address = null;
 })" > /dev/null
 echo "  ✓ Quote submitted"
 echo ""

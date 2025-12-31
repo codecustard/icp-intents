@@ -11,6 +11,7 @@ import Principal "mo:base/Principal";
 import Blob "mo:base/Blob";
 import Array "mo:base/Array";
 import Nat "mo:base/Nat";
+import Nat8 "mo:base/Nat8";
 import Nat32 "mo:base/Nat32";
 import Nat64 "mo:base/Nat64";
 import Text "mo:base/Text";
@@ -258,15 +259,21 @@ module {
       // Extract the UTXO data by finding the matching transaction
       // Look for the pattern: "transactionId":"<tx_id>"
       let txIdPattern = "\"transactionId\":\"" # request.tx_id # "\"";
-      if (not textContains(responseText, txIdPattern)) {
-        return #Failed("Transaction ID not found in expected format");
+
+      // Find the substring starting from our transaction
+      let parts = Text.split(responseText, #text txIdPattern);
+      let iter = parts;
+      ignore iter.next(); // Skip before match
+
+      let afterTxId = switch (iter.next()) {
+        case null { return #Failed("Transaction ID not found in expected format") };
+        case (?text) { text };
       };
 
-      // Find the amount field after the matching transaction
-      // We need to extract: "amount":"<value>"
-      let amountOpt = extractJsonField(responseText, "amount");
+      // Now extract amount from the portion AFTER our transaction ID
+      let amountOpt = extractJsonField(afterTxId, "amount");
       let amount = switch (amountOpt) {
-        case null { return #Failed("Could not extract amount from response") };
+        case null { return #Failed("Could not extract amount from response for transaction " # request.tx_id) };
         case (?amountStr) {
           switch (parseNat(amountStr)) {
             case null { return #Failed("Invalid amount format: " # amountStr) };
@@ -280,10 +287,10 @@ module {
         return #Failed("Amount mismatch: expected " # Nat.toText(request.expected_amount) # " but got " # Nat.toText(amount));
       };
 
-      // Extract scriptPublicKey if available
-      let scriptPubKey = switch (extractJsonField(responseText, "scriptPublicKey")) {
+      // Extract scriptPublicKey from the same transaction (it's a hex string in JSON)
+      let scriptPubKey = switch (extractJsonField(afterTxId, "scriptPublicKey")) {
         case null { Blob.fromArray([]) };
-        case (?spk) { Text.encodeUtf8(spk) };
+        case (?spk) { Blob.fromArray(HoosatAddress.array_from_hex(spk)) };
       };
 
       // Success - construct UTXO
@@ -320,7 +327,7 @@ module {
       ];
 
       // Get public key
-      let { public_key } = await management.ecdsa_public_key({
+      let { public_key } = await (with cycles = 10_000_000_000) management.ecdsa_public_key({
         canister_id = null;
         derivation_path = derivation_path;
         key_id = {
@@ -329,23 +336,35 @@ module {
         };
       });
 
+      Debug.print("HoosatVerification: Signing public key: " # HoosatAddress.hex_from_array(Blob.toArray(public_key)));
+
       // Convert Types.UTXO to HoosatTypes.UTXO
+      let utxoScriptHex = Blob.toArray(utxo.script_pubkey) |> HoosatAddress.hex_from_array(_);
+      Debug.print("HoosatVerification: UTXO scriptPublicKey: " # utxoScriptHex);
+
       let hoosatUtxo : HoosatTypes.UTXO = {
         transactionId = utxo.tx_id;
         index = Nat32.fromNat(utxo.output_index);
         amount = Nat64.fromNat(utxo.amount);
-        scriptPublicKey = Blob.toArray(utxo.script_pubkey) |> HoosatAddress.hex_from_array(_);
+        scriptPublicKey = utxoScriptHex;
         scriptVersion = 0;
         address = utxo.address;
       };
 
+      // Normalize address: ensure it starts with capital "Hoosat:"
+      let normalizedAddress = Text.replace(recipientAddress, #text "hoosat:", "Hoosat:");
+
       // Decode recipient address to get script
-      let recipientDecoded = switch (HoosatAddress.decode_address(recipientAddress)) {
+      Debug.print("HoosatVerification: Attempting to decode address: " # normalizedAddress);
+      let recipientDecoded = switch (HoosatAddress.decode_address(normalizedAddress)) {
         case (?(addrType, payload)) {
+          Debug.print("HoosatVerification: Successfully decoded address, type: " # debug_show(addrType));
           HoosatAddress.pubkey_to_script(payload, addrType)
         };
         case null {
-          return #err(#InvalidAddress);
+          Debug.print("HoosatVerification: FAILED to decode recipient address: " # normalizedAddress);
+          Debug.print("HoosatVerification: This may be due to invalid checksum, unsupported address type, or malformed address");
+          return #err(#InternalError("Invalid Hoosat address - address decode failed. Please verify the address is correct and try again."));
         };
       };
 
@@ -355,8 +374,8 @@ module {
         HoosatAddress.ECDSA
       );
 
-      // Calculate fee (simple: 1000 hootas)
-      let fee : Nat64 = 1000;
+      // Calculate fee (network minimum: 1635 hootas, use 2000 to be safe)
+      let fee : Nat64 = 2000;
 
       // Build transaction
       let tx = HoosatTransaction.build_transaction(
@@ -390,8 +409,8 @@ module {
         case null { return #err(#InternalError("Failed to compute sighash")) };
       };
 
-      // Sign with tECDSA
-      let { signature } = await management.sign_with_ecdsa({
+      // Sign with tECDSA (needs ~26B cycles)
+      let { signature } = await (with cycles = 30_000_000_000) management.sign_with_ecdsa({
         message_hash = sighash;
         derivation_path = derivation_path;
         key_id = {
@@ -400,8 +419,19 @@ module {
         };
       });
 
-      // Encode signature to hex
-      let sigHex = HoosatAddress.hex_from_array(Blob.toArray(signature));
+      // Format signature script with proper push format for Hoosat
+      // Format: [length][signature][sighash_type]
+      let signature_bytes = Blob.toArray(signature);
+      let sighash_type: Nat8 = 0x01; // SigHashAll
+
+      let script_bytes = Array.flatten<Nat8>([
+        [Nat8.fromNat(signature_bytes.size() + 1)], // Length prefix (signature + sighash type)
+        signature_bytes,                             // Raw signature (64 bytes)
+        [sighash_type]                              // Sighash type
+      ]);
+      let signatureScript = HoosatAddress.hex_from_array(script_bytes);
+
+      Debug.print("HoosatVerification: Signature script length: " # Nat.toText(script_bytes.size()));
 
       // Update transaction with signature in signatureScript
       let signedTx : HoosatTypes.HoosatTransaction = {
@@ -411,7 +441,7 @@ module {
           func (input) {
             {
               previousOutpoint = input.previousOutpoint;
-              signatureScript = sigHex; // Add signature here
+              signatureScript = signatureScript; // Add formatted signature script
               sequence = input.sequence;
               sigOpCount = input.sigOpCount;
             }
@@ -428,21 +458,99 @@ module {
       let serializedTx = HoosatTransaction.serialize_transaction(signedTx);
 
       #ok(Text.encodeUtf8(serializedTx))
-    } catch (_) {
-      #err(#InternalError("Failed to build/sign transaction"))
+    } catch (e) {
+      let errorMsg = Error.message(e);
+      Debug.print("HoosatVerification: Build/sign failed: " # errorMsg);
+      #err(#InternalError("Failed to build/sign transaction: " # errorMsg))
     }
   };
 
   /// Broadcast a signed transaction to the Hoosat network
   /// Returns the transaction hash
   public func broadcastTransaction(
-    _signedTx: Blob,
-    _config: HoosatConfig
+    signedTx: Blob,
+    config: HoosatConfig
   ) : async IntentResult<Text> {
-    // TODO: Implement actual RPC broadcast
-    Debug.print("HoosatVerification: Broadcasting transaction");
+    try {
+      let management = getManagementCanister();
 
-    // Placeholder transaction hash
-    #ok("0x" # "placeholder_hoosat_txhash")
+      // Use provided RPC URL or default to mainnet
+      let baseUrl = if (Text.size(config.rpc_url) > 0) {
+        config.rpc_url
+      } else {
+        "https://api.network.hoosat.fi"
+      };
+
+      let url = baseUrl # "/transactions";
+
+      Debug.print("HoosatVerification: Broadcasting transaction to " # url);
+
+      // Decode the signed transaction blob to text (already in JSON format)
+      let requestBody = switch (Text.decodeUtf8(signedTx)) {
+        case null { return #err(#InternalError("Invalid transaction encoding")) };
+        case (?text) { text };
+      };
+
+      Debug.print("HoosatVerification: Request body length: " # Nat.toText(Text.size(requestBody)));
+
+      let httpResponse = try {
+        await (with cycles = 230_000_000_000) management.http_request({
+          url = url;
+          max_response_bytes = ?4096; // Enough for response with tx hash
+          method = #post;
+          headers = [
+            {
+              name = "Content-Type";
+              value = "application/json";
+            },
+            {
+              name = "Accept";
+              value = "application/json";
+            }
+          ];
+          body = ?Text.encodeUtf8(requestBody);
+          transform = null;
+          is_replicated = ?false;
+        })
+      } catch (err) {
+        let errorMsg = Error.message(err);
+        Debug.print("HoosatVerification: HTTP request error: " # errorMsg);
+        return #err(#InternalError("HTTP request error: " # errorMsg));
+      };
+
+      Debug.print("HoosatVerification: HTTP response status: " # Nat.toText(httpResponse.status));
+
+      if (httpResponse.status != 200) {
+        let responseText = switch (Text.decodeUtf8(httpResponse.body)) {
+          case null { "Invalid UTF-8 in error response" };
+          case (?text) { text };
+        };
+        Debug.print("HoosatVerification: Error response: " # responseText);
+        return #err(#InternalError("Hoosat API returned status " # Nat.toText(httpResponse.status) # ": " # responseText));
+      };
+
+      // Parse response to extract transaction ID
+      let responseText = switch (Text.decodeUtf8(httpResponse.body)) {
+        case null { return #err(#InternalError("Invalid UTF-8 in response")) };
+        case (?text) { text };
+      };
+
+      Debug.print("HoosatVerification: Broadcast response: " # responseText);
+
+      // Extract transaction ID from response
+      // Response format: {"transactionId": "..."}
+      let txId = switch (extractJsonField(responseText, "transactionId")) {
+        case null { return #err(#InternalError("Could not extract transaction ID from response: " # responseText)) };
+        case (?id) { id };
+      };
+
+      Debug.print("HoosatVerification: Transaction broadcast successful: " # txId);
+
+      #ok(txId)
+    } catch (e) {
+      let errorMsg = Error.message(e);
+      Debug.print("HoosatVerification: Broadcast failed: " # errorMsg);
+      #err(#InternalError("Failed to broadcast transaction: " # errorMsg))
+    }
   };
 }
