@@ -44,17 +44,18 @@ The `Verification.replica.test.mo` file contains integration tests that verify:
 Edit `test/Verification.replica.test.mo` and update the constants:
 
 ```motoko
-// Hoosat section
-let HOOSAT_RPC = "https://api.hoosat.fi/testnet";
-let TX_ID = "abc123..."; // Your tx ID
-let ADDRESS = "hoosat:qq..."; // Your address
-let AMOUNT = 100000000; // Your amount
+// Hoosat section (mainnet)
+let HOOSAT_RPC = "https://api.network.hoosat.fi";
+let HOOSAT_TX_ID = "abc123..."; // Your tx ID from explorer
+let HOOSAT_ADDRESS = "hoosat:qq..."; // Recipient address
+let HOOSAT_AMOUNT = 100000000; // Amount in sompi
 
-// EVM section
-let CHAIN_ID = 11155111; // Sepolia
-let TX_HASH = "0xabc123..."; // Your tx hash
-let TO_ADDRESS = "0x123..."; // Your to address
-let VALUE = 1000000000000000; // Your value in wei
+// EVM section (Sepolia testnet recommended)
+let EVM_RPC_CANISTER = "7hfb6-caaaa-aaaar-qadga-cai"; // Official EVM RPC canister
+let EVM_CHAIN_ID = 11155111; // 11155111 = Sepolia, 1 = Ethereum mainnet
+let EVM_TX_HASH = "0xabc123..."; // Full tx hash from explorer
+let EVM_TO_ADDRESS = "0x123..."; // Recipient address (lowercase)
+let EVM_VALUE = 1000000000000000; // Amount in wei
 ```
 
 ### Step 3: Run Tests
@@ -101,21 +102,26 @@ mops test Verification.replica
 ## Expected Output
 
 ```
-• Hoosat Verification (Real Transaction)
-  ✓ verify confirmed transaction returns Success
-    Hoosat verification result: #Success({ confirmations = 42; ... })
-    ✓ Transaction verified with 42 confirmations
+Test files:
+• test/Verification.replica.test.mo
 
-  ✓ verify with high min_confirmations returns Pending
-    ✓ Correctly returned Pending
+ ✓ verify confirmed Hoosat transaction
+   Hoosat verification: #Success({ confirmations = 26_428; ... })
+   ✓ Verified with 26_428 confirmations
 
-• EVM Verification (Real Transaction)
-  ✓ verify confirmed EVM transaction returns Success
-    EVM verification result: #Success({ confirmations = 15; ... })
-    ✓ Transaction verified with 15 confirmations
+ ✓ verify with high confirmation requirement returns Pending
+   ✓ Correctly returned Pending
 
-  ✓ verify with high min_confirmations returns Pending
-    ✓ Correctly returned Pending
+ ✓ verify confirmed EVM transaction
+   EVM verification: #Success({ confirmations = 15; ... })
+   ✓ Verified with 15 confirmations
+
+ ✓ verify EVM with high confirmation requirement returns Pending
+   ✓ Correctly returned Pending
+
+PASS
+Tests passed
+Done in 30.00s, passed 4
 ```
 
 ## Manual Testing

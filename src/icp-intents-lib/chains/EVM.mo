@@ -12,6 +12,7 @@ import Array "mo:base/Array";
 import Iter "mo:base/Iter";
 import Error "mo:base/Error";
 import Debug "mo:base/Debug";
+import ExperimentalCycles "mo:base/ExperimentalCycles";
 import Types "../core/Types";
 import ChainTypes "../chains/ChainTypes";
 import TECDSA "../crypto/TECDSA";
@@ -55,7 +56,7 @@ module {
     blockNumber : ?Nat;
   };
 
-  // EVM RPC types (simplified)
+  // EVM RPC types (from candid interface)
   type RpcServices = {
     #Custom : { chainId : Nat64; services : [RpcApi] };
     #EthSepolia : ?[EthSepoliaService];
@@ -67,13 +68,51 @@ module {
 
   type RpcApi = { url : Text; headers : ?[HttpHeader] };
   type HttpHeader = { name : Text; value : Text };
-  type EthSepoliaService = { #Alchemy; #BlockPi; #PublicNode; #Ankr };
-  type EthMainnetService = { #Alchemy; #BlockPi; #Cloudflare; #PublicNode; #Ankr };
-  type L2MainnetService = { #Alchemy; #BlockPi; #PublicNode; #Ankr };
+  // Based on actual canister types from backtrace
+  type L2Service = { #Alchemy; #Ankr; #BlockPi; #PublicNode };
+  type EthSepoliaService = L2Service; // Shares type with other L2s
+  type EthMainnetService = { #Alchemy; #Ankr; #BlockPi; #Cloudflare; #PublicNode };
+  type L2MainnetService = L2Service;
+
+  type JsonRpcError = { code : Int64; message : Text };
+  type ProviderError = {
+    #TooFewCycles : { expected : Nat; received : Nat };
+    #MissingRequiredProvider;
+    #ProviderNotFound;
+    #NoPermission;
+    #InvalidRpcConfig : Text;
+  };
+  type ValidationError = {
+    #Custom : Text;
+    #InvalidHex : Text;
+  };
+  type RejectionCode = {
+    #NoError;
+    #CanisterError;
+    #SysTransient;
+    #DestinationInvalid;
+    #Unknown;
+    #SysFatal;
+    #CanisterReject;
+  };
+  type HttpOutcallError = {
+    #IcError : { code : RejectionCode; message : Text };
+    #InvalidHttpJsonRpcResponse : {
+      status : Nat16;
+      body : Text;
+      parsingError : ?Text;
+    };
+  };
+  type RpcError = {
+    #JsonRpcError : JsonRpcError;
+    #ProviderError : ProviderError;
+    #ValidationError : ValidationError;
+    #HttpOutcallError : HttpOutcallError;
+  };
 
   type GetTransactionReceiptResult = {
     #Ok : ?TransactionReceipt;
-    #Err : Text;
+    #Err : RpcError;
   };
 
   type MultiGetTransactionReceiptResult = {
@@ -84,8 +123,11 @@ module {
   type RpcService = {
     #EthSepolia : EthSepoliaService;
     #EthMainnet : EthMainnetService;
-    #Chain : Nat64;
+    #ArbitrumOne : L2MainnetService;
+    #BaseMainnet : L2MainnetService;
+    #OptimismMainnet : L2MainnetService;
     #Provider : Nat64;
+    #Custom : RpcApi;
   };
 
   type MultiJsonRequestResult = {
@@ -95,10 +137,11 @@ module {
 
   type JsonRequestResult = {
     #Ok : Text;
-    #Err : Text;
+    #Err : RpcError;
   };
 
-  /// EVM RPC canister interface (simplified)
+  /// EVM RPC canister interface - use actual canister types
+  /// Import the real types from deployed canister
   type EVMRPCCanister = actor {
     eth_getTransactionReceipt : (RpcServices, ?RpcConfig, Text) -> async MultiGetTransactionReceiptResult;
     multi_request : (RpcServices, ?RpcConfig, Text) -> async MultiJsonRequestResult;
@@ -106,6 +149,12 @@ module {
 
   type RpcConfig = {
     responseSizeEstimate : ?Nat64;
+    responseConsensus : ?ConsensusStrategy;
+  };
+
+  type ConsensusStrategy = {
+    #Equality;
+    #Threshold : { total : ?Nat8; min : Nat8 };
   };
 
   /// Get EVM RPC canister actor
@@ -125,7 +174,7 @@ module {
       case null {
         switch (chain_id) {
           case (1) { #EthMainnet(null) };
-          case (11155111) { #EthSepolia(null) };
+          case (11155111) { #EthSepolia(?[#Alchemy]) }; // Use Alchemy for Sepolia
           case (8453) { #BaseMainnet(null) };
           case (42161) { #ArbitrumOne(null) };
           case (10) { #OptimismMainnet(null) };
@@ -143,9 +192,16 @@ module {
   /// Extract receipt from multi-provider response
   func extractReceipt(response : MultiGetTransactionReceiptResult) : ?TransactionReceipt {
     switch (response) {
-      case (#Consistent(#Ok(receipt))) { receipt };
-      case (#Consistent(#Err(_))) { null };
+      case (#Consistent(#Ok(receipt))) {
+        Debug.print("EVM: Receipt extraction - got receipt: " # debug_show(receipt != null));
+        receipt
+      };
+      case (#Consistent(#Err(err))) {
+        Debug.print("EVM: Receipt extraction - error: " # debug_show(err));
+        null
+      };
       case (#Inconsistent(results)) {
+        Debug.print("EVM: Receipt extraction - inconsistent results from " # debug_show(results.size()) # " providers");
         for ((_, result) in results.vals()) {
           switch (result) {
             case (#Ok(?receipt)) { return ?receipt };
@@ -160,17 +216,32 @@ module {
   /// Extract JSON string from response
   func extractJsonString(response : MultiJsonRequestResult) : ?Text {
     switch (response) {
-      case (#Consistent(#Ok(json))) { ?json };
+      case (#Consistent(#Ok(json))) {
+        Debug.print("EVM: JSON response OK");
+        ?json
+      };
+      case (#Consistent(#Err(#HttpOutcallError(#InvalidHttpJsonRpcResponse(errData))))) {
+        // The body contains the actual JSON response even though it's marked as error
+        Debug.print("EVM: Extracting from error body");
+        ?errData.body
+      };
+      case (#Consistent(#Err(err))) {
+        Debug.print("EVM: JSON response error: " # debug_show(err));
+        null
+      };
       case (#Inconsistent(results)) {
+        Debug.print("EVM: JSON inconsistent results");
         for ((_, result) in results.vals()) {
           switch (result) {
             case (#Ok(json)) { return ?json };
+            case (#Err(#HttpOutcallError(#InvalidHttpJsonRpcResponse(errData)))) {
+              return ?errData.body
+            };
             case _ {};
           };
         };
         null
       };
-      case _ { null };
     }
   };
 
@@ -259,10 +330,11 @@ module {
     let rpc = getRpcCanister(config.evm_rpc_canister);
 
     try {
-      // Get transaction receipt
+      // Get transaction receipt (add cycles for RPC call)
+      ExperimentalCycles.add<system>(1_000_000_000); // 1B cycles (enough for RPC + overhead)
       let receipt_response = await rpc.eth_getTransactionReceipt(
         rpc_services,
-        ?{ responseSizeEstimate = ?1000 },
+        ?{ responseSizeEstimate = ?1000; responseConsensus = null },
         proof.tx_hash
       );
 
@@ -276,45 +348,59 @@ module {
         };
       };
 
-      // Get transaction details for value
+      // Get transaction details for value (add cycles)
       let tx_request = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionByHash\",\"params\":[\"" # proof.tx_hash # "\"],\"id\":1}";
+      ExperimentalCycles.add<system>(1_000_000_000); // 1B cycles
       let tx_response = await rpc.multi_request(
         rpc_services,
-        ?{ responseSizeEstimate = ?1000 },
+        ?{ responseSizeEstimate = ?1000; responseConsensus = null },
         tx_request
       );
 
       let tx_value = switch (extractJsonString(tx_response)) {
         case (?json) {
+          Debug.print("EVM: Transaction response: " # json);
           parseTransactionValue(json)
         };
-        case null { null };
+        case null {
+          Debug.print("EVM: No transaction response");
+          null
+        };
       };
 
-      // Get current block number to calculate confirmations
+      // Get current block number to calculate confirmations (add cycles)
       let block_request = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}";
+      ExperimentalCycles.add<system>(1_000_000_000); // 1B cycles
       let block_response = await rpc.multi_request(
         rpc_services,
-        ?{ responseSizeEstimate = ?200 },
+        ?{ responseSizeEstimate = ?200; responseConsensus = null },
         block_request
       );
 
       let current_block = switch (extractJsonString(block_response)) {
         case (?json) {
-          // Parse "result":"0x..." from JSON
-          let parts = Iter.toArray(Text.split(json, #text "\"result\":\""));
-          if (parts.size() < 2) {
-            return #Failed("Could not parse current block number");
-          };
-          let afterResult = parts[1];
-          let resultParts = Iter.toArray(Text.split(afterResult, #text "\""));
-          if (resultParts.size() < 1) {
-            return #Failed("Could not extract block number");
-          };
-          switch (hexToNat(resultParts[0])) {
+          Debug.print("EVM: Block number response: " # json);
+          // Response might be just the hex value or wrapped in JSON
+          // Try direct hex parsing first
+          switch (hexToNat(json)) {
             case (?n) { n };
             case null {
-              return #Failed("Invalid block number format");
+              // Try JSON-RPC format: {"result":"0x..."}
+              let parts = Iter.toArray(Text.split(json, #text "\"result\":\""));
+              if (parts.size() < 2) {
+                return #Failed("Could not parse current block number from: " # json);
+              };
+              let afterResult = parts[1];
+              let resultParts = Iter.toArray(Text.split(afterResult, #text "\""));
+              if (resultParts.size() < 1) {
+                return #Failed("Could not extract block number");
+              };
+              switch (hexToNat(resultParts[0])) {
+                case (?n) { n };
+                case null {
+                  return #Failed("Invalid block number format");
+                };
+              }
             };
           }
         };
