@@ -12,11 +12,9 @@ import Array "mo:base/Array";
 import Iter "mo:base/Iter";
 import Error "mo:base/Error";
 import Debug "mo:base/Debug";
-import ExperimentalCycles "mo:base/ExperimentalCycles";
 import Types "../core/Types";
 import ChainTypes "../chains/ChainTypes";
 import TECDSA "../crypto/TECDSA";
-import Cycles "../utils/Cycles";
 
 module {
   type IntentResult<T> = Types.IntentResult<T>;
@@ -330,9 +328,8 @@ module {
     let rpc = getRpcCanister(config.evm_rpc_canister);
 
     try {
-      // Get transaction receipt (add cycles for RPC call)
-      ExperimentalCycles.add<system>(1_000_000_000); // 1B cycles (enough for RPC + overhead)
-      let receipt_response = await rpc.eth_getTransactionReceipt(
+      // Get transaction receipt (with cycles for RPC call)
+      let receipt_response = await (with cycles = 1_000_000_000) rpc.eth_getTransactionReceipt(
         rpc_services,
         ?{ responseSizeEstimate = ?1000; responseConsensus = null },
         proof.tx_hash
@@ -348,10 +345,9 @@ module {
         };
       };
 
-      // Get transaction details for value (add cycles)
+      // Get transaction details for value
       let tx_request = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_getTransactionByHash\",\"params\":[\"" # proof.tx_hash # "\"],\"id\":1}";
-      ExperimentalCycles.add<system>(1_000_000_000); // 1B cycles
-      let tx_response = await rpc.multi_request(
+      let tx_response = await (with cycles = 1_000_000_000) rpc.multi_request(
         rpc_services,
         ?{ responseSizeEstimate = ?1000; responseConsensus = null },
         tx_request
@@ -368,10 +364,9 @@ module {
         };
       };
 
-      // Get current block number to calculate confirmations (add cycles)
+      // Get current block number to calculate confirmations
       let block_request = "{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}";
-      ExperimentalCycles.add<system>(1_000_000_000); // 1B cycles
-      let block_response = await rpc.multi_request(
+      let block_response = await (with cycles = 1_000_000_000) rpc.multi_request(
         rpc_services,
         ?{ responseSizeEstimate = ?200; responseConsensus = null },
         block_request

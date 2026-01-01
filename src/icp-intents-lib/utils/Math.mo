@@ -4,7 +4,6 @@
 
 import Nat "mo:base/Nat";
 import Nat64 "mo:base/Nat64";
-import Int "mo:base/Int";
 
 module {
   public let MAX_BPS : Nat = 10_000; // 100% in basis points
@@ -52,7 +51,7 @@ module {
   /// Returns (fee, net_amount)
   public func calculateFee(gross : Nat, fee_bps : Nat) : (Nat, Nat) {
     let fee = calculateBps(gross, fee_bps);
-    let net = if (gross >= fee) { gross - fee } else { 0 };
+    let net = Nat.sub(gross, fee);
     (fee, net)
   };
 

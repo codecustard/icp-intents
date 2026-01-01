@@ -29,7 +29,7 @@ module {
   };
 
   /// Validate minimum output
-  public func validateMinOutput(min_output : Nat, source_amount : Nat) : ?IntentError {
+  public func validateMinOutput(min_output : Nat, _source_amount : Nat) : ?IntentError {
     if (min_output == 0) {
       return ?#InvalidAmount("Minimum output must be greater than zero");
     };

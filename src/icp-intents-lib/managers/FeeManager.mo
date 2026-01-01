@@ -7,6 +7,7 @@ import Math "../utils/Math";
 import HashMap "mo:base/HashMap";
 import Text "mo:base/Text";
 import Iter "mo:base/Iter";
+import Nat "mo:base/Nat";
 
 module {
   type FeeBreakdown = Types.FeeBreakdown;
@@ -43,11 +44,7 @@ module {
     let total_fees = protocol_fee + solver_fee + solver_tip;
 
     // Calculate net output to user
-    let net_output = if (output_amount >= total_fees) {
-      output_amount - total_fees
-    } else {
-      0
-    };
+    let net_output = Nat.sub(output_amount, total_fees);
 
     {
       protocol_fee = protocol_fee;

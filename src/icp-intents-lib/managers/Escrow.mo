@@ -105,8 +105,8 @@ module {
       return #err(#InsufficientBalance);
     };
 
-    // Release the amount
-    let newBalance = currentBalance - amount;
+    // Release the amount (safe: checked above)
+    let newBalance = Nat.sub(currentBalance, amount);
     if (newBalance == 0) {
       state.balances.delete(key);
     } else {
@@ -120,7 +120,7 @@ module {
     };
 
     if (currentTotal >= amount) {
-      let newTotal = currentTotal - amount;
+      let newTotal = Nat.sub(currentTotal, amount);
       if (newTotal == 0) {
         state.total_locked.delete(token);
       } else {
