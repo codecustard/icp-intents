@@ -1,104 +1,67 @@
-# ICP Intents - Cross-Chain Intent-Based Swap Library
+# ICP Intents SDK - Cross-Chain Intent-Based Exchange
 
-A Motoko library/SDK for building permissionless cross-chain intent-based swap systems on the Internet Computer Protocol (ICP). Inspired by NEAR Intents but optimized for ICP's unique capabilities including Chain Fusion and threshold ECDSA (tECDSA).
+A Motoko SDK for building cross-chain intent-based exchange systems on the Internet Computer Protocol (ICP). Features modular architecture, multi-chain support (EVM, Hoosat, Bitcoin), and comprehensive security through threshold ECDSA and Chain Fusion.
 
 ## 🚀 Features
 
-- **Permissionless**: Anyone can post intents or act as a solver
-- **Cross-Chain**: Support for EVM chains (Ethereum, Base) with extensibility for others
-- **Secure Escrow**: Built-in escrow system for ICP and ICRC-1 tokens
-- **tECDSA Integration**: Generates unique deposit addresses per intent using ICP's threshold ECDSA
-- **EVM Verification**: Uses official EVM RPC canister for multi-provider consensus
-- **Anti-Griefing**: 2-step flow (quote → confirm) prevents solver spam
-- **Modular Design**: Use individual components or the full system
-- **Extensible**: Built with hooks for custom chains and verification methods
+- **Multi-Chain Support**: EVM (Ethereum, Base, Sepolia), Hoosat, Bitcoin, extensible for others
+- **Secure Escrow**: Multi-token escrow with invariant enforcement
+- **Threshold ECDSA**: Generate unique deposit addresses per intent using ICP's tECDSA
+- **Chain Verification**: HTTP outcalls for trustless cross-chain verification
+- **Comprehensive Types**: Full type safety with detailed error handling
+- **Modular Design**: Use individual components or the complete SDK
+- **Upgrade Safe**: Stable storage patterns for canister upgrades
 
 ## 📋 Table of Contents
 
 - [Architecture](#architecture)
 - [Quick Start](#quick-start)
-- [Library Modules](#library-modules)
+- [SDK Modules](#sdk-modules)
 - [Usage Examples](#usage-examples)
 - [Testing](#testing)
-- [Deployment](#deployment)
 - [Security Considerations](#security-considerations)
-- [Extending the Library](#extending-the-library)
+- [Migration Guide](#migration-guide)
 
 ## 🏗 Architecture
 
-### Multi-Pool Deployment Model
+### Modular SDK Structure
 
-**This library is designed for permissionless, decentralized intent markets.**
-
-Unlike traditional DEX designs with a single central pool, this library enables:
-
-- **Multiple Intent Pool Canisters** - Anyone can deploy their own intent pool canister using this library
-- **Permissionless Competition** - Pools compete on fees, service quality, and liquidity
-- **Decentralized Market** - Solvers can scan all pools to find the best intents
-- **Market-Driven Selection** - Users choose pools based on reputation, fees, and performance
+The SDK is organized into focused, composable modules:
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                                                     │
-│              Decentralized Intent Market            │
-│                                                     │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐ │
-│  │ Intent Pool │  │ Intent Pool │  │ Intent Pool │ │
-│  │  Canister A │  │  Canister B │  │  Canister C │ │
-│  │ (0.3% fee)  │  │ (0.25% fee) │  │ (0.5% fee)  │ │
-│  └──────┬──────┘  └──────┬──────┘  └──────┬──────┘ │
-│         │                │                │         │
-│         └────────────────┼────────────────┘         │
-│                          │                          │
-└──────────────────────────┼──────────────────────────┘
-                           │
-                    ┌──────▼──────┐
-                    │   Solvers   │
-                    │ (scan pools) │
-                    └─────────────┘
+icp-intents-lib/
+├── IntentLib.mo           # Main SDK entry point
+├── core/                  # Core types and state
+│   ├── Types.mo           # All type definitions
+│   ├── State.mo           # State management
+│   ├── Errors.mo          # Error types
+│   └── Events.mo          # Event logging
+├── managers/              # Business logic
+│   ├── IntentManager.mo   # Intent lifecycle orchestration
+│   ├── Escrow.mo          # Multi-token escrow
+│   └── FeeManager.mo      # Fee calculations
+├── chains/                # Chain integrations
+│   ├── ChainTypes.mo      # Chain type definitions
+│   ├── ChainRegistry.mo   # Supported chains registry
+│   ├── EVM.mo             # EVM verification
+│   ├── Hoosat.mo          # Hoosat UTXO verification
+│   └── Bitcoin.mo         # Bitcoin (coming soon)
+├── crypto/                # Cryptography
+│   └── TECDSA.mo          # Threshold ECDSA
+└── utils/                 # Utilities
+    ├── Math.mo            # Safe math & basis points
+    ├── Validation.mo      # Input validation
+    └── Cycles.mo          # Cycle management
 ```
 
-**Benefits:**
-- ✅ No single point of failure
-- ✅ Competition drives down fees
-- ✅ Innovation in pool features
-- ✅ Censorship resistant
-
-### Transfer-Agnostic Design
-
-**Important**: This library focuses on **intent lifecycle management** and does NOT include token transfer logic.
-
-**What the library provides:**
-- Intent creation and management
-- Quote submission and selection
-- Escrow state tracking (lock/unlock)
-- tECDSA address generation
-- Cross-chain verification
-- Event logging
-
-**What integrators must add:**
-- ICP/ICRC-1 token transfers
-- Ledger integration
-- Custom transfer logic
-- Fee collection transfers
-
-This design provides **maximum flexibility** - you can integrate with:
-- ICRC-1 tokens
-- ICP Ledger
-- Custom token systems
-- NFTs or other assets
-- Any future token standard
-
-See [Integration Patterns](#integration-patterns) for examples.
-
-### Flow Diagram
+### Intent Lifecycle Flow
 
 ```
 ┌─────────┐              ┌─────────┐              ┌─────────┐
-│  User   │              │ Canister│              │ Solver  │
+│  User   │              │   SDK   │              │ Solver  │
 └────┬────┘              └────┬────┘              └────┬────┘
      │                        │                        │
-     │ 1. Post Intent         │                        │
+     │ 1. Create Intent       │                        │
      │───────────────────────>│                        │
      │                        │                        │
      │                        │   2. Submit Quote      │
@@ -107,33 +70,34 @@ See [Integration Patterns](#integration-patterns) for examples.
      │ 3. Confirm Quote       │                        │
      │───────────────────────>│                        │
      │                        │                        │
-     │ <─── tECDSA Address ───│                        │
+     │ <─── Address (tECDSA) ─│                        │
      │                        │                        │
      │     Share Address      │                        │
      │───────────────────────────────────────────────>│
      │                        │                        │
-     │                        │   4. Deposit Funds     │
-     │                        │    (on dest chain)     │
+     │                        │ 4. Solver Deposits     │
+     │                        │    (dest chain)        │
      │                        │<───────────────────────│
      │                        │                        │
-     │                        │   5. Claim Fulfillment │
+     │                        │ 5. Mark Deposited      │
      │                        │<───────────────────────│
      │                        │                        │
-     │                        │  Verify via EVM RPC    │
-     │                        │         ✓              │
+     │                        │  Verify via HTTP       │
+     │                        │  Outcall ✓             │
      │                        │                        │
-     │                        │  Release Escrow        │
-     │                        │─────────────────────> │
+     │                        │ 6. Fulfill Intent      │
+     │                        │<───────────────────────│
+     │                        │                        │
+     │                        │  Release Escrow ───────>│
 ```
 
-### Core Modules
+### State Machine
 
-1. **Types**: All type definitions
-2. **Utils**: Validation and helper functions
-3. **Escrow**: Token escrow management (standalone or integrated)
-4. **TECDSA**: Threshold ECDSA address generation
-5. **Verification**: Cross-chain deposit verification via EVM RPC
-6. **IntentManager**: Orchestrates the full intent lifecycle
+```
+PendingQuote → Quoted → Confirmed → Deposited → Fulfilled
+     │            │         │            │
+     └────────────┴─────────┴────────────┴──→ Cancelled
+```
 
 ## 🚀 Quick Start
 
@@ -157,526 +121,649 @@ mops install
 ### Basic Usage
 
 ```motoko
-import IntentManager "mo:icp-intents-lib/IntentManager";
-import Types "mo:icp-intents-lib/Types";
+import IntentLib "../src/icp-intents-lib/IntentLib";
 import Principal "mo:base/Principal";
 import Time "mo:base/Time";
 
-persistent actor MyIntentPool {
-  // Initialize state with enhanced orthogonal persistence
-  let config : Types.ProtocolConfig = {
-    default_protocol_fee_bps = 30;  // 0.3%
-    max_protocol_fee_bps = 100;
+actor MyIntentPool {
+  // Initialize SDK
+  let config : IntentLib.SystemConfig = {
+    protocol_fee_bps = 30;  // 0.3%
+    fee_collector = Principal.fromText("...");
+    supported_chains = [
+      #EVM({ chain_id = 1; name = "ethereum"; network = "mainnet"; rpc_urls = null }),
+      #EVM({ chain_id = 8453; name = "base"; network = "mainnet"; rpc_urls = null }),
+    ];
     min_intent_amount = 100_000;
-    max_intent_lifetime = 7 * 24 * 60 * 60 * 1_000_000_000;
-    max_active_intents = 1000;
-    max_events = 100;
-    admin = Principal.fromText("your-admin-principal");
-    fee_collector = Principal.fromText("your-fee-collector");
-    paused = false;
+    max_intent_amount = 1_000_000_000_000;
+    default_deadline_duration = 7 * 24 * 60 * 60 * 1_000_000_000; // 7 days
+    solver_allowlist = null; // Permissionless
   };
 
-  transient var state = IntentManager.init(
-    config,
-    { key_name = "key_1"; derivation_path = [] },  // tECDSA config
-    { evm_rpc_canister_id = Principal.fromText("..."); min_confirmations = 12 },
-    [1, 8453]  // Ethereum and Base
-  );
+  stable var state = IntentLib.init(config);
 
-  // User posts an intent
-  public shared(msg) func postIntent(req: Types.CreateIntentRequest) : async Types.IntentResult<Nat> {
-    await IntentManager.postIntent(state, msg.caller, req, Time.now())
+  // Create intent
+  public shared(msg) func createIntent(
+    source : IntentLib.ChainSpec,
+    destination : IntentLib.ChainSpec,
+    source_amount : Nat,
+    min_output : Nat,
+    dest_recipient : Text,
+    deadline : Time.Time,
+  ) : async IntentLib.IntentResult<Nat> {
+    IntentLib.createIntent(
+      state,
+      msg.caller,
+      source,
+      destination,
+      source_amount,
+      min_output,
+      dest_recipient,
+      deadline,
+      Time.now()
+    )
   };
 
-  // Note: You must add token transfer logic - see Integration Patterns section
+  // Submit quote
+  public shared(msg) func submitQuote(
+    intent_id : Nat,
+    output_amount : Nat,
+    fee : Nat,
+    solver_tip : Nat,
+  ) : async IntentLib.IntentResult<()> {
+    IntentLib.submitQuote(
+      state,
+      intent_id,
+      msg.caller,
+      output_amount,
+      fee,
+      solver_tip,
+      null, // solver_dest_address
+      Time.now()
+    )
+  };
+
+  // More methods...
 }
 ```
 
-## 📚 Library Modules
+## 📚 SDK Modules
 
-### Types Module (`src/icp-intents-lib/Types.mo`)
+### IntentLib - Main Entry Point
 
-All core type definitions. Import with:
+The primary interface to the SDK. Import with:
 
 ```motoko
-import Types "mo:icp-intents-lib/Types";
+import IntentLib "../src/icp-intents-lib/IntentLib";
 ```
 
-Key types:
-- `Intent`: Main intent structure
-- `Quote`: Solver quote
-- `IntentStatus`: Lifecycle states
-- `IntentError`: Comprehensive error types
-- `IntentResult<T>`: Result type alias
+**Key Functions:**
+- `init(config)` - Initialize SDK state
+- `createIntent(...)` - Create new intent
+- `submitQuote(...)` - Submit solver quote
+- `confirmQuote(...)` - Confirm quote and generate address
+- `markDeposited(...)` - Mark destination deposit complete
+- `fulfillIntent(...)` - Release escrow to solver
+- `cancelIntent(...)` - Cancel intent
 
-### Utils Module (`src/icp-intents-lib/Utils.mo`)
+**Re-exported Types:**
+- `Intent`, `Quote`, `IntentStatus`
+- `IntentResult<T>`, `IntentError`
+- `SystemConfig`, `ChainSpec`
+- `Chain`, `EVMChain`, `HoosatChain`
 
-Validation and utility functions:
+### Core Modules
+
+#### Types (`core/Types.mo`)
+
+All type definitions for the SDK:
 
 ```motoko
-import Utils "mo:icp-intents-lib/Utils";
+import Types "../src/icp-intents-lib/core/Types";
 
-// Validate Ethereum address
-let isValid = Utils.isValidEthAddress("0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0");
-
-// Calculate protocol fee
-let fee = Utils.calculateFee(1_000_000, 30);  // 0.3% fee
-
-// Parse amounts with decimals
-let amount = Utils.parseAmount("1.5", 8);  // ICP with e8s
+type Intent = Types.Intent;
+type Quote = Types.Quote;
+type IntentStatus = Types.IntentStatus;
 ```
 
-### Escrow Module (`src/icp-intents-lib/Escrow.mo`)
+**Key Types:**
+- `Intent` - Main intent structure with full state
+- `Quote` - Solver quote with pricing
+- `IntentStatus` - State machine states
+- `ChainSpec` - Chain specification (chain, token, network)
+- `IntentError` - Comprehensive error types
+- `SystemConfig` - SDK configuration
 
-Standalone escrow system (use in DEX or other apps):
+#### Errors (`core/Errors.mo`)
+
+Comprehensive error handling:
 
 ```motoko
-import Escrow "mo:icp-intents-lib/Escrow";
+type IntentError = {
+  #NotFound;
+  #Unauthorized;
+  #InvalidAmount : Text;
+  #InvalidDeadline : Text;
+  #InvalidChain : Text;
+  #InvalidToken : Text;
+  #InvalidAddress : Text;
+  #InsufficientBalance;
+  #QuoteExpired;
+  #InvalidState : Text;
+  #VerificationFailed : Text;
+  // ... and more
+};
+```
 
-var escrowState = Escrow.init();
+### Manager Modules
 
-// Deposit
-let result = Escrow.deposit(escrowState, user, "ICP", 1_000_000);
+#### IntentManager (`managers/IntentManager.mo`)
+
+Orchestrates the full intent lifecycle:
+
+```motoko
+import IntentManager "../src/icp-intents-lib/managers/IntentManager";
+
+// Create intent
+let result = IntentManager.createIntent(
+  state,
+  user,
+  source,
+  destination,
+  source_amount,
+  min_output,
+  dest_recipient,
+  deadline,
+  current_time
+);
+
+// Get intent
+let intent = IntentManager.getIntent(state, intent_id);
+```
+
+#### Escrow (`managers/Escrow.mo`)
+
+Multi-token escrow with invariant enforcement:
+
+```motoko
+import Escrow "../src/icp-intents-lib/managers/Escrow";
+
+let escrow = Escrow.init();
 
 // Lock funds
-ignore Escrow.lock(escrowState, user, "ICP", 500_000);
+let result = Escrow.lock(escrow, user, "ICP", 1_000_000);
 
-// Release (e.g., to solver)
-ignore Escrow.release(escrowState, user, "ICP", 500_000);
+// Release funds
+ignore Escrow.release(escrow, user, "ICP", 500_000);
+
+// Get balance
+let balance = Escrow.getBalance(escrow, user, "ICP");
 ```
 
-### TECDSA Module (`src/icp-intents-lib/TECDSA.mo`)
+**Features:**
+- Per-user, per-token balance tracking
+- Lock/release operations
+- Invariant verification
+- Stable storage support
 
-Generate unique addresses for intents:
+#### FeeManager (`managers/FeeManager.mo`)
 
-```motoko
-import TECDSA "mo:icp-intents-lib/TECDSA";
-
-let config = { key_name = "test_key_1" };
-let address = await TECDSA.deriveAddress(config, intentId, userPrincipal);
-// Returns: "0xabc123..."
-```
-
-**Note**: Uses Keccak256 from the [mops sha3 package](https://mops.one/sha3) for secure Ethereum address generation.
-
-### Verification Module (`src/icp-intents-lib/Verification.mo`)
-
-Verify deposits on EVM chains:
+Fee calculations and collection:
 
 ```motoko
-import Verification "mo:icp-intents-lib/Verification";
+import FeeManager "../src/icp-intents-lib/managers/FeeManager";
 
-// Verify native ETH
-let result = await Verification.verifyNativeDeposit(
-  config,
-  "0xabc...",
-  expectedAmount,
-  1  // Ethereum mainnet
+let fees = FeeManager.calculateFees(
+  output_amount,
+  protocol_fee_bps,
+  quote
 );
+// Returns: { protocol_fee, solver_fee, solver_tip, total_fees, net_output }
+```
+
+### Chain Modules
+
+#### EVM (`chains/EVM.mo`)
+
+EVM chain verification via HTTP outcalls:
+
+```motoko
+import EVM "../src/icp-intents-lib/chains/EVM";
+
+let config = {
+  rpc_urls = ["https://eth.llamarpc.com"];
+  min_confirmations = 12;
+};
+
+let result = await EVM.verify(config, request);
+// Returns: #Success | #Pending | #Failed
+```
+
+**Supports:**
+- Native ETH transfers
+- ERC-20 token transfers
+- Transaction receipt verification
+- Confirmation counting
+
+#### Hoosat (`chains/Hoosat.mo`)
+
+Hoosat UTXO chain verification:
+
+```motoko
+import Hoosat "../src/icp-intents-lib/chains/Hoosat";
+
+let result = await Hoosat.verify(config, request);
+```
+
+**Features:**
+- UTXO verification via HTTP outcalls
+- Confirmation checking
+- Address validation
+
+### Crypto Modules
+
+#### TECDSA (`crypto/TECDSA.mo`)
+
+Threshold ECDSA address generation:
+
+```motoko
+import TECDSA "../src/icp-intents-lib/crypto/TECDSA";
+import ChainTypes "../src/icp-intents-lib/chains/ChainTypes";
+
+let context : ChainTypes.AddressContext = {
+  intent_id = 1;
+  user = userPrincipal;
+};
+
+let address = await TECDSA.generateAddress(
+  #EVM({ chain_id = 1; name = "ethereum"; network = "mainnet"; rpc_urls = null }),
+  context,
+  "key_1"
+);
+// Returns: #ok("0xabc123...") or #err(error)
+```
+
+**Features:**
+- Deterministic derivation paths
+- Ethereum address generation (Keccak256)
+- Bitcoin address generation
+- Public key management
+
+### Utility Modules
+
+#### Math (`utils/Math.mo`)
+
+Safe mathematical operations:
+
+```motoko
+import Math "../src/icp-intents-lib/utils/Math";
+
+// Basis points
+let fee = Math.calculateBps(1_000_000, 30); // 0.3%
+assert(fee == 3_000);
+
+// Fee calculation
+let (fee, net) = Math.calculateFee(1_000_000, 30);
+
+// Slippage
+let min_amount = Math.applySlippage(1_000_000, 50); // 0.5% slippage
+
+// Constants
+Math.MAX_BPS // 10_000 (100%)
+```
+
+#### Validation (`utils/Validation.mo`)
+
+Input validation:
+
+```motoko
+import Validation "../src/icp-intents-lib/utils/Validation";
+
+// Validate amount
+let err = Validation.validateAmount(amount, config);
+
+// Validate deadline
+let err = Validation.validateDeadline(deadline, now, config);
+
+// Validate address
+let err = Validation.validateEthAddress("0x742d35Cc...");
+let err = Validation.validateHoosatAddress("Hoosat:qz...");
 ```
 
 ## 💡 Usage Examples
 
-### Example 1: Complete Intent Pool Canister
-
-See `src/examples/BasicIntentCanister.mo` for a full implementation including:
-- User intent posting
-- Solver quoting
-- Escrow management
-- Background refund checks
-- Admin functions
-
-**Note**: This example is a starting point - you need to add actual token transfer logic.
-
-### Example 2: Standalone Escrow (for DEX or other apps)
+### Example 1: Complete Intent Pool
 
 ```motoko
-import Escrow "mo:icp-intents-lib/Escrow";
+import IntentLib "../src/icp-intents-lib/IntentLib";
+import Principal "mo:base/Principal";
+import Time "mo:base/Time";
 
-persistent actor DEX {
-  var escrow = Escrow.init();
-
-  public shared(msg) func deposit(token: Text, amount: Nat) : async Types.IntentResult<()> {
-    // Add your token transfer logic here (ICRC-1, ICP Ledger, etc.)
-    // ...
-    Escrow.deposit(escrow, msg.caller, token, amount)
+actor IntentPool {
+  // Configuration
+  let config : IntentLib.SystemConfig = {
+    protocol_fee_bps = 30;
+    fee_collector = Principal.fromText("...");
+    supported_chains = [
+      #EVM({ chain_id = 1; name = "ethereum"; network = "mainnet"; rpc_urls = null }),
+      #Hoosat({ network = "mainnet"; rpc_url = "https://api.network.hoosat.fi"; min_confirmations = 10 }),
+    ];
+    min_intent_amount = 1_000;
+    max_intent_amount = 1_000_000_000_000;
+    default_deadline_duration = 604_800_000_000_000; // 7 days
+    solver_allowlist = null;
   };
 
-  public shared(msg) func swap(/* params */) : async Types.IntentResult<()> {
-    // Lock tokens, execute swap, release
-    ignore Escrow.lock(escrow, msg.caller, fromToken, amount);
-    // ... swap logic ...
-    ignore Escrow.release(escrow, msg.caller, fromToken, amount);
-    #ok(())
+  stable var state = IntentLib.init(config);
+
+  // User creates intent: ICP → ETH
+  public shared(msg) func createIntent(
+    source_amount : Nat,
+    min_output : Nat,
+    dest_recipient : Text,
+    deadline : Time.Time,
+  ) : async IntentLib.IntentResult<Nat> {
+    let source : IntentLib.ChainSpec = {
+      chain = "icp";
+      chain_id = null;
+      token = "ICP";
+      network = "mainnet";
+    };
+
+    let destination : IntentLib.ChainSpec = {
+      chain = "ethereum";
+      chain_id = ?1;
+      token = "native";
+      network = "mainnet";
+    };
+
+    IntentLib.createIntent(
+      state,
+      msg.caller,
+      source,
+      destination,
+      source_amount,
+      min_output,
+      dest_recipient,
+      deadline,
+      Time.now()
+    )
+  };
+
+  // Solver submits quote
+  public shared(msg) func submitQuote(
+    intent_id : Nat,
+    output_amount : Nat,
+    fee : Nat,
+  ) : async IntentLib.IntentResult<()> {
+    IntentLib.submitQuote(
+      state,
+      intent_id,
+      msg.caller,
+      output_amount,
+      fee,
+      0, // solver_tip
+      null,
+      Time.now()
+    )
+  };
+
+  // User confirms quote
+  public shared(msg) func confirmQuote(
+    intent_id : Nat,
+    quote_index : Nat,
+  ) : async IntentLib.IntentResult<Text> {
+    await IntentLib.confirmQuote(
+      state,
+      msg.caller,
+      intent_id,
+      quote_index,
+      Time.now()
+    )
+  };
+
+  // Solver marks deposit complete
+  public shared(msg) func markDeposited(
+    intent_id : Nat,
+    tx_hash : Text,
+  ) : async IntentLib.IntentResult<()> {
+    await IntentLib.markDeposited(
+      state,
+      msg.caller,
+      intent_id,
+      tx_hash,
+      Time.now()
+    )
+  };
+
+  // Solver fulfills intent
+  public shared(msg) func fulfillIntent(
+    intent_id : Nat,
+  ) : async IntentLib.IntentResult<()> {
+    await IntentLib.fulfillIntent(
+      state,
+      msg.caller,
+      intent_id,
+      Time.now()
+    )
+  };
+
+  // Query methods
+  public query func getIntent(id : Nat) : async ?IntentLib.Intent {
+    IntentLib.getIntent(state, id)
   };
 }
 ```
 
-## 🔌 Integration Patterns
+### Example 2: Token Integration
 
-Since this library is **transfer-agnostic**, you need to add token transfer logic. Here are common patterns:
+For token deposits/withdrawals, see the live example in `src/SimpleIntentPool.mo` which includes:
+- ICRC-2 token transfers
+- Escrow deposits
+- Token registration
+- Full integration patterns
 
-### Pattern 1: ICRC-1 Token Integration
+### Example 3: Standalone Escrow
+
+Use the escrow module independently:
 
 ```motoko
-import ICRC1 "mo:icrc1-mo/ICRC1";
-import IntentManager "mo:icp-intents-lib/IntentManager";
+import Escrow "../src/icp-intents-lib/managers/Escrow";
+import Principal "mo:base/Principal";
 
-persistent actor MyIntentPool {
-  let icrc1Ledger = actor ("ryjl3-tyaaa-aaaaa-aaaba-cai") : ICRC1.Self;
+actor DEX {
+  stable var escrow = Escrow.init();
 
-  public shared(msg) func depositEscrow(token: Text, amount: Nat) : async Types.IntentResult<()> {
-    // 1. Transfer tokens from user to canister
-    let transferArgs = {
-      from_subaccount = null;
-      to = { owner = Principal.fromActor(this); subaccount = null };
-      amount = amount;
-      fee = null;
-      memo = null;
-      created_at_time = null;
-    };
-
-    let result = await icrc1Ledger.icrc1_transfer(transferArgs);
-
-    switch (result) {
-      case (#Ok(_)) {
-        // 2. Credit user's escrow balance
-        Escrow.deposit(state.escrow, msg.caller, token, amount)
-      };
-      case (#Err(e)) { #err(#TransferFailed) };
-    };
+  public func lockForSwap(user : Principal, token : Text, amount : Nat) : async () {
+    ignore Escrow.lock(escrow, user, token, amount);
   };
 
-  // When releasing escrow to solver after fulfillment
-  public func releaseFunds(solver: Principal, token: Text, amount: Nat) : async () {
-    let transferArgs = {
-      from_subaccount = null;
-      to = { owner = solver; subaccount = null };
-      amount = amount;
-      fee = null;
-      memo = null;
-      created_at_time = null;
-    };
-    ignore await icrc1Ledger.icrc1_transfer(transferArgs);
+  public func releaseAfterSwap(user : Principal, token : Text, amount : Nat) : async () {
+    ignore Escrow.release(escrow, user, token, amount);
   };
 }
 ```
-
-### Pattern 2: ICP Ledger Integration
-
-```motoko
-import Ledger "mo:icp-ledger-mo/Ledger";
-import Types "mo:icp-ledger-mo/Types";
-
-persistent actor MyIntentPool {
-  let ledger = actor ("ryjl3-tyaaa-aaaaa-aaaba-cai") : Ledger.Self;
-
-  public shared(msg) func depositICP(amount: Nat64) : async Types.IntentResult<()> {
-    // 1. Transfer ICP from user to canister
-    let transferArgs : Types.TransferArgs = {
-      memo = 0;
-      amount = { e8s = amount };
-      fee = { e8s = 10_000 };
-      from_subaccount = null;
-      to = AccountIdentifier.fromPrincipal(Principal.fromActor(this), null);
-      created_at_time = null;
-    };
-
-    let result = await ledger.transfer(transferArgs);
-
-    switch (result) {
-      case (#Ok(_)) {
-        Escrow.deposit(state.escrow, msg.caller, "ICP", Nat64.toNat(amount))
-      };
-      case (#Err(_)) { #err(#TransferFailed) };
-    };
-  };
-}
-```
-
-### Pattern 3: Custom Solver Payment
-
-```motoko
-// In your claimFulfillment implementation
-public func claimFulfillment(intentId: Nat, txHash: ?Text) : async Types.IntentResult<()> {
-  // 1. Verify the intent is fulfilled (library handles this)
-  let verifyResult = await Verification.verifyDeposit(...);
-
-  switch (verifyResult) {
-    case (#ok(_)) {
-      // 2. Get intent details
-      let intent = IntentManager.getIntent(state, intentId);
-
-      switch (intent) {
-        case (?i) {
-          // 3. Calculate amounts
-          let solverAmount = i.source_amount;
-          let protocolFee = Utils.calculateFee(i.source_amount, config.default_protocol_fee_bps);
-
-          // 4. Release escrow (library tracks state)
-          ignore Escrow.unlock(state.escrow, i.creator, "ICP", solverAmount + protocolFee);
-          ignore Escrow.release(state.escrow, i.creator, "ICP", solverAmount + protocolFee);
-
-          // 5. Transfer tokens (YOU implement this)
-          await transferToSolver(i.selected_quote.solver, "ICP", solverAmount);
-          await transferToFeeCollector(config.fee_collector, "ICP", protocolFee);
-
-          #ok(())
-        };
-        case null { #err(#NotFound) };
-      };
-    };
-    case (#err(e)) { #err(e) };
-  };
-}
-```
-
-### Pattern 4: Multi-Token Pool
-
-```motoko
-persistent actor MultiTokenPool {
-  // Map token identifiers to their ledger canisters
-  let tokenLedgers = HashMap.HashMap<Text, Principal>(10, Text.equal, Text.hash);
-
-  public func registerToken(tokenId: Text, ledgerCanister: Principal) : async () {
-    // Admin-only function
-    tokenLedgers.put(tokenId, ledgerCanister);
-  };
-
-  public func depositToken(tokenId: Text, amount: Nat) : async Types.IntentResult<()> {
-    switch (tokenLedgers.get(tokenId)) {
-      case (?ledgerPrincipal) {
-        let ledger = actor (Principal.toText(ledgerPrincipal)) : ICRC1.Self;
-        // Transfer and credit escrow...
-      };
-      case null { #err(#InvalidToken) };
-    };
-  };
-}
-```
-
-**Key Points:**
-- The library tracks escrow state (lock/unlock/release)
-- You implement actual token transfers
-- This gives you full control over which tokens to support
-- You can integrate with any ledger standard (ICRC-1, ICP Ledger, custom, etc.)
 
 ## 🧪 Testing
 
-**💡 TIP**: Test on cheap networks first! See [TESTING.md](TESTING.md) for complete guide.
+### Test Structure
 
-### Supported Networks (Built-in)
-
-| Network | Chain ID | Cost | Use For |
-|---------|----------|------|---------|
-| Ethereum | 1 | Expensive | Production only |
-| Base | 8453 | ~$0.01/tx | Low-cost testing |
-| Sepolia | 11155111 | FREE | Development |
-| Base Sepolia | 84532 | FREE | Development |
-
-### Quick Test (Sepolia - FREE)
-
-```bash
-dfx start --clean --background
-dfx deploy BasicIntentCanister
-
-# Post intent on Sepolia testnet (FREE!)
-dfx canister call BasicIntentCanister postIntent '(
-  record {
-    source_amount = 1_000_000;
-    source_token = "ICP";
-    dest_chain = "sepolia";        # Testnet
-    dest_chain_id = 11155111;      # Sepolia
-    dest_token_address = "native";
-    dest_recipient = "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb0";
-    min_output = 900_000;
-    deadline = 9999999999000000000;
-    custom_rpc_urls = null;
-    verification_hints = null;
-    metadata = null;
-  }
-)'
-
-# Get free testnet ETH: https://sepoliafaucet.com/
-```
-
-### Unit and Replica Tests
-
-The library includes comprehensive test coverage (37 tests) across unit and replica tests:
-
-**Unit Tests (29 tests)**
-- `test/Utils.test.mo` - Validation and utilities (8 tests)
-- `test/Escrow.test.mo` - Escrow accounting (6 tests)
-- `test/IntentManager/IntentManager.test.mo` - Intent lifecycle (15 tests)
-
-**Replica Tests (8 tests)** - Require local replica for IC API calls
-- `test/TECDSA.replica.test.mo` - Address generation (4 tests)
-- `test/IntentManager/IntentManager.replica.test.mo` - confirmQuote flow (4 tests)
-
-**Run all tests:**
-```bash
-# Unit tests
-mops test
-
-# Replica tests (requires dfx start)
-dfx start --clean --background
-mops test
-```
-
-**Test organization:**
 ```
 test/
-├── Utils.test.mo              # Unit tests
-├── Escrow.test.mo             # Unit tests
-├── TECDSA.replica.test.mo     # Replica tests
+├── Escrow.test.mo                     # Escrow tests (8 passing)
+├── Utils.test.mo                      # Utils placeholder
+├── TECDSA.replica.test.mo             # TECDSA placeholder
 └── IntentManager/
-    ├── IntentManager.test.mo          # Unit tests
-    └── IntentManager.replica.test.mo  # Replica tests
+    ├── IntentManager.test.mo          # IntentManager placeholder
+    └── IntentManager.replica.test.mo  # Replica placeholder
 ```
 
-For complete testing guide including Base, ERC20 tokens, and troubleshooting, see **[TESTING.md](TESTING.md)**.
-
-## 🚀 Deployment
-
-### 1. Local Deployment
+**Run tests:**
 
 ```bash
-dfx start --clean --background
-mops install
-dfx deploy
+mops test
 ```
 
-### 2. IC Mainnet
+**Test Status:**
+- ✅ Escrow module: 8 passing tests
+- ⚠️ IntentManager, TECDSA, Utils: Placeholder tests (need rewrite for new API)
+
+### Integration Testing
+
+Test scripts for full flows:
 
 ```bash
-# Update tECDSA config to use "key_1"
-# Update EVM RPC canister ID
+# Test intent creation → deposit
+./test-intent-flow.sh
 
-dfx deploy --network ic --with-cycles 10000000000000
+# Test fulfillment flow
+./test-fulfillment.sh
 ```
-
-### 3. Configuration
-
-Update in your canister:
-- `key_name`: "test_key_1" (local/testnet) or "key_1" (mainnet)
-- `evm_rpc_canister_id`: Official EVM RPC canister on mainnet
-- `supportedChains`: Add your desired chain IDs
 
 ## 🔒 Security Considerations
 
-### ⚠️ CRITICAL: Before Production
+### Critical Security Features
 
-1. **Keccak256 Implementation**
-   - ✅ Uses Keccak256 from [mops sha3 package](https://mops.one/sha3)
-   - Generates secure Ethereum addresses from tECDSA public keys
+1. **Threshold ECDSA**
+   - Unique derivation path per intent
+   - Never reuse addresses
+   - Keccak256 for Ethereum addresses
 
-2. **Unique Derivation Paths**
-   - Never reuse tECDSA paths
-   - Current: `[intentId, userPrincipal]`
-   - Each intent gets unique address
+2. **Escrow Invariants**
+   - Balance tracking verified on every operation
+   - Safe arithmetic (no overflow/underflow)
+   - Multi-token isolation
 
-3. **Verification Safety**
-   - Wait for sufficient confirmations (12+ for Ethereum)
-   - Use EVM RPC canister for multi-provider consensus
-   - Handle chain reorgs gracefully
+3. **Chain Verification**
+   - HTTP outcalls for trustless verification
+   - Confirmation requirements enforced
+   - Reorg protection
 
-4. **Escrow Invariants**
-   - Always: `balance = locked + available`
-   - Comprehensive tests in `test/Escrow.test.mo`
-   - Protected against underflow/overflow
+4. **Input Validation**
+   - All inputs validated before state changes
+   - Address format verification
+   - Amount bounds checking
 
-5. **Upgrade Safety**
-   - Use stable variables for persistent state
-   - Test upgrades on testnet first
-   - Implement pre/post upgrade hooks
+### Pre-Production Checklist
 
-### Security Audit Checklist
-
-- [x] Keccak256 implementation
-- [ ] Audit tECDSA derivation uniqueness
-- [ ] Verify escrow accounting
-- [ ] Test all error paths
-- [ ] Load test (1000+ intents)
-- [ ] Cycle cost analysis
-- [ ] Upgrade testing
 - [ ] External security audit
+- [ ] Load testing (1000+ intents)
+- [ ] Upgrade testing
+- [ ] Cycle cost analysis
+- [ ] Error path testing
+- [ ] Chain reorg testing
 
-## 🔧 Extending the Library
+## 📖 Migration Guide
 
-### Adding EVM Chains
+### From Old API (Pre-Refactor)
 
-```motoko
-let supportedChains = [
-  1,      // Ethereum
-  8453,   // Base
-  42161,  // Arbitrum
-  137,    // Polygon
-];
-```
-
-### Adding Non-EVM Chains
-
-Extend `Verification.mo`:
+**Module Imports:**
 
 ```motoko
-public func verifyCustomChain(
-  address: Text,
-  amount: Nat,
-  chainHints: Text
-) : async VerificationResult {
-  // Custom verification logic
-}
+// OLD
+import IntentManager "mo:icp-intents-lib/IntentManager";
+import Types "mo:icp-intents-lib/Types";
+import Utils "mo:icp-intents-lib/Utils";
+import Escrow "mo:icp-intents-lib/Escrow";
+import TECDSA "mo:icp-intents-lib/TECDSA";
+
+// NEW
+import IntentLib "../src/icp-intents-lib/IntentLib";
+// or specific modules:
+import IntentManager "../src/icp-intents-lib/managers/IntentManager";
+import Types "../src/icp-intents-lib/core/Types";
+import Math "../src/icp-intents-lib/utils/Math";
+import Validation "../src/icp-intents-lib/utils/Validation";
+import Escrow "../src/icp-intents-lib/managers/Escrow";
+import TECDSA "../src/icp-intents-lib/crypto/TECDSA";
 ```
 
-### Custom Escrow
+**API Changes:**
 
-Extend `Escrow.mo` for NFTs or other assets.
+```motoko
+// OLD - Request records
+await IntentManager.postIntent(state, user, {
+  source = sourceAsset;
+  destination = destAsset;
+  // ... more fields
+}, currentTime);
 
-## 📖 Project Structure
+// NEW - Individual parameters
+IntentLib.createIntent(
+  state,
+  user,
+  source,
+  destination,
+  source_amount,
+  min_output,
+  dest_recipient,
+  deadline,
+  current_time
+);
+```
+
+**Escrow Changes:**
+
+```motoko
+// OLD - deposit/withdraw/lock/unlock
+Escrow.deposit(state, user, token, amount);
+Escrow.lock(state, user, token, amount);
+Escrow.unlock(state, user, token, amount);
+Escrow.withdraw(state, user, token, amount);
+
+// NEW - Only lock/release
+Escrow.lock(state, user, token, amount);
+Escrow.release(state, user, token, amount);
+// Note: Deposit/withdraw now handled by integrator
+```
+
+**Utils Refactored:**
+
+```motoko
+// OLD
+Utils.calculateFee(amount, bps);
+Utils.isValidEthAddress(addr);
+
+// NEW
+Math.calculateBps(amount, bps);
+Validation.validateEthAddress(addr);
+```
+
+## 📝 Project Structure
 
 ```
 icp-intents/
 ├── src/
-│   ├── icp-intents-lib/          # Reusable library modules
-│   │   ├── Types.mo              # Core type definitions
-│   │   ├── Utils.mo              # Utility functions
-│   │   ├── Escrow.mo             # Escrow management
-│   │   ├── TECDSA.mo             # Address generation
-│   │   ├── Verification.mo       # Chain verification
-│   │   └── IntentManager.mo      # Intent orchestration
-│   ├── examples/
-│   │   ├── BasicIntentCanister.mo  # Example pool canister
-│   │   └── BasicIntentCanister.did # Candid interface
-│   └── icp-intents-backend/
-│       └── main.mo               # Default entry point
+│   ├── icp-intents-lib/          # SDK Library
+│   │   ├── IntentLib.mo          # Main entry point
+│   │   ├── core/                 # Core types & state
+│   │   ├── managers/             # Business logic
+│   │   ├── chains/               # Chain integrations
+│   │   ├── crypto/               # Cryptography
+│   │   └── utils/                # Utilities
+│   ├── SimpleIntentPool.mo       # Example pool canister
+│   └── MockICRC1Ledger.mo        # Test ledger
 ├── test/
-│   ├── Utils.test.mo             # Utils unit tests (8 tests)
-│   ├── Escrow.test.mo            # Escrow unit tests (6 tests)
-│   ├── TECDSA.replica.test.mo    # tECDSA replica tests (4 tests)
-│   └── IntentManager/
-│       ├── IntentManager.test.mo         # Intent unit tests (15 tests)
-│       └── IntentManager.replica.test.mo # Intent replica tests (4 tests)
-├── mops.toml                     # Package configuration
-├── dfx.json                      # DFX configuration
-├── README.md                     # This file
-├── ARCHITECTURE.md               # Detailed architecture docs
-├── TESTING.md                    # Testing guide
-└── DEPLOYMENT.md                 # Deployment guide
+│   ├── Escrow.test.mo            # Escrow tests
+│   ├── Utils.test.mo             # Utils tests
+│   ├── TECDSA.replica.test.mo    # TECDSA tests
+│   └── IntentManager/            # IntentManager tests
+├── test-intent-flow.sh           # Integration test
+├── test-fulfillment.sh           # Fulfillment test
+├── mops.toml                     # Package config
+└── dfx.json                      # DFX config
 ```
-
-## 📝 API Reference
-
-See `src/examples/BasicIntentCanister.did` for complete Candid interface.
 
 ## 🤝 Contributing
 
 Contributions welcome! Priority areas:
 
-- [ ] Real keccak256 implementation
-- [ ] Bitcoin support
+- [ ] Rewrite IntentManager tests for new API
+- [ ] Rewrite TECDSA tests for new API
+- [ ] Add Math module tests
+- [ ] Add Validation module tests
+- [ ] Bitcoin chain support
 - [ ] Solana support
-- [ ] Solver reputation system
-- [ ] Gas estimation
 - [ ] Intent batching
 
 ## 📄 License
@@ -687,7 +774,6 @@ MIT License
 
 - Inspired by NEAR Intents
 - Built on ICP Chain Fusion
-- Uses official EVM RPC canister
 - Motoko language and community
 
 ---
