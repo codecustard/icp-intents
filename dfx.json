@@ -5,12 +5,6 @@
       "type": "motoko",
       "wasm_memory_persistence": "keep"
     },
-    "BasicIntentCanister": {
-      "main": "src/examples/BasicIntentCanister.mo",
-      "type": "motoko",
-      "wasm_memory_persistence": "keep",
-      "init_cycles": 3000000000000
-    },
     "MockICRC1Ledger": {
       "main": "src/examples/MockICRC1Ledger.mo",
       "type": "motoko",

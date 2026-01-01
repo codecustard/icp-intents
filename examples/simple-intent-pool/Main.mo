@@ -68,6 +68,14 @@ persistent actor SimpleIntentPool {
       min_confirmations = 10;
     }));
 
+    // Register ICP (native IC tokens via ICRC-2)
+    IntentLib.registerChain(state, "icp", #Custom({
+      name = "Internet Computer";
+      network = "mainnet";
+      verification_canister = null; // No external verification needed for ICRC-2 tokens
+      metadata = null;
+    }));
+
     Debug.print("Initialized chains: " # debug_show(IntentLib.listChains(state)));
   };
 

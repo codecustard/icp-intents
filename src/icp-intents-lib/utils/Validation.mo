@@ -33,9 +33,8 @@ module {
     if (min_output == 0) {
       return ?#InvalidAmount("Minimum output must be greater than zero");
     };
-    if (min_output > source_amount) {
-      return ?#InvalidAmount("Minimum output cannot exceed source amount");
-    };
+    // Note: Cannot compare min_output to source_amount for cross-chain swaps
+    // (different tokens, different decimals, different values)
     null
   };
 
@@ -53,17 +52,15 @@ module {
   };
 
   /// Validate quote amount
-  public func validateQuoteAmount(output_amount : Nat, min_output : Nat, source_amount : Nat) : ?IntentError {
+  public func validateQuoteAmount(output_amount : Nat, min_output : Nat, _source_amount : Nat) : ?IntentError {
     if (output_amount == 0) {
       return ?#InvalidQuote("Output amount must be greater than zero");
     };
     if (output_amount < min_output) {
       return ?#InvalidQuote("Output amount below minimum: " # debug_show(min_output));
     };
-    // Sanity check: output shouldn't be more than 10x source (likely error)
-    if (output_amount > source_amount * 10) {
-      return ?#InvalidQuote("Output amount suspiciously high");
-    };
+    // Note: Cannot sanity-check output vs source for cross-chain swaps
+    // (different tokens with different values and decimals)
     null
   };
 
