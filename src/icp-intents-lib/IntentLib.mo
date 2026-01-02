@@ -125,10 +125,11 @@ module {
   public func verifyAndMarkDeposited(
     state : ManagerState,
     intent_id : Nat,
+    caller : Principal,
     verified_amount : Nat,
     current_time : Time.Time
   ) : IntentResult<()> {
-    IntentManager.markDeposited(state, intent_id, verified_amount, current_time)
+    IntentManager.markDeposited(state, intent_id, caller, verified_amount, current_time)
   };
 
   /// Fulfill an intent
@@ -236,11 +237,12 @@ module {
   // Fee Manager Functions
 
   /// Calculate fee breakdown for a quote
+  /// Returns null if fees exceed output amount
   public func calculateFees(
     output_amount : Nat,
     protocol_fee_bps : Nat,
     quote : Quote
-  ) : FeeBreakdown {
+  ) : ?FeeBreakdown {
     FeeManager.calculateFees(output_amount, protocol_fee_bps, quote)
   };
 

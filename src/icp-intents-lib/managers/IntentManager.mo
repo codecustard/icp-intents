@@ -362,6 +362,7 @@ module {
   public func markDeposited(
     state : ManagerState,
     intent_id : Nat,
+    caller : Principal,
     verified_amount : Nat,
     current_time : Time.Time
   ) : IntentResult<()> {
@@ -370,17 +371,26 @@ module {
       case (?i) { i };
     };
 
-    // Transition to Deposited
-    let transitioned = State.transitionToDeposited(intent, current_time, current_time);
-    let new_intent = switch (transitioned) {
-      case (#err(e)) { return #err(e) };
-      case (#ok(i)) { i };
+    // Verify caller is the intent creator
+    if (not Principal.equal(intent.user, caller)) {
+      return #err(#NotIntentCreator);
     };
 
-    // Lock funds in escrow
+    // Lock funds in escrow BEFORE state transition to maintain consistency
     switch (Escrow.lock(state.escrow, intent.user, intent.source.token, verified_amount)) {
       case (#err(e)) { return #err(e) };
       case (#ok(())) {};
+    };
+
+    // Transition to Deposited (only after escrow is locked)
+    let transitioned = State.transitionToDeposited(intent, current_time, current_time);
+    let new_intent = switch (transitioned) {
+      case (#err(e)) {
+        // Rollback: unlock the escrow if state transition fails
+        ignore Escrow.release(state.escrow, intent.user, intent.source.token, verified_amount);
+        return #err(e);
+      };
+      case (#ok(i)) { i };
     };
 
     let updated_intent = updateIntent(
@@ -440,11 +450,14 @@ module {
     };
 
     // Calculate fees
-    let fees = FeeManager.calculateFees(
+    let fees = switch (FeeManager.calculateFees(
       quote.output_amount,
       intent.protocol_fee_bps,
       quote
-    );
+    )) {
+      case null { return #err(#InvalidFee("Fees exceed output amount")) };
+      case (?f) { f };
+    };
 
     // Transfer tokens to solver (destination tokens)
     switch (await releaseToSolver(state, intent, quote.solver, fees.net_output)) {
@@ -643,7 +656,7 @@ module {
       case (#err(e)) { #err(e) };
       case (#ok(block_index)) {
         // Mark intent as deposited
-        switch (markDeposited(state, intent_id, intent.source_amount, current_time)) {
+        switch (markDeposited(state, intent_id, intent.user, intent.source_amount, current_time)) {
           case (#err(e)) { #err(e) };
           case (#ok(())) {
             Debug.print("Deposited " # Nat.toText(intent.source_amount) # " " # intent.source.token # " for intent " # Nat.toText(intent_id));

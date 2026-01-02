@@ -66,17 +66,26 @@ suite("Math", func() {
 
   test("calculateFee returns fee and net amount", func() {
     // 0.3% fee on 1,000,000
-    let (fee1, net1) = Math.calculateFee(1_000_000, 30);
+    let (fee1, net1) = switch (Math.calculateFee(1_000_000, 30)) {
+      case null { assert(false); (0, 0) };
+      case (?(f, n)) { (f, n) };
+    };
     assert(fee1 == 3_000);
     assert(net1 == 997_000);
 
     // 1% fee on 1,000,000
-    let (fee2, net2) = Math.calculateFee(1_000_000, 100);
+    let (fee2, net2) = switch (Math.calculateFee(1_000_000, 100)) {
+      case null { assert(false); (0, 0) };
+      case (?(f, n)) { (f, n) };
+    };
     assert(fee2 == 10_000);
     assert(net2 == 990_000);
 
     // 0% fee
-    let (fee3, net3) = Math.calculateFee(1_000_000, 0);
+    let (fee3, net3) = switch (Math.calculateFee(1_000_000, 0)) {
+      case null { assert(false); (0, 0) };
+      case (?(f, n)) { (f, n) };
+    };
     assert(fee3 == 0);
     assert(net3 == 1_000_000);
   });
@@ -225,7 +234,10 @@ suite("Math", func() {
     assert(Math.calculateBps(0, 30) == 0);
     assert(Math.applySlippage(0, 50) == 0);
 
-    let (fee, net) = Math.calculateFee(0, 30);
+    let (fee, net) = switch (Math.calculateFee(0, 30)) {
+      case null { assert(false); (0, 0) };
+      case (?(f, n)) { (f, n) };
+    };
     assert(fee == 0);
     assert(net == 0);
   });

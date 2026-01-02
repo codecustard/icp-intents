@@ -18,6 +18,23 @@ func createTestQuote() : Types.Quote {
   }
 };
 
+// Helper function to unwrap fee calculation result
+func unwrapFees(result : ?Types.FeeBreakdown) : Types.FeeBreakdown {
+  switch (result) {
+    case null {
+      assert(false); // Should not happen in valid tests
+      {
+        protocol_fee = 0;
+        solver_fee = 0;
+        solver_tip = 0;
+        total_fees = 0;
+        net_output = 0;
+      }
+    };
+    case (?fees) { fees };
+  }
+};
+
 suite("FeeManager - Initialization", func() {
   test("init creates empty fee state", func() {
     let state = FeeManager.init();
@@ -34,7 +51,7 @@ suite("FeeManager - Fee Calculation", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 30; // 0.3%
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, quote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, quote));
 
     // Protocol fee = 1000_000 * 30 / 10000 = 3000
     assert(breakdown.protocol_fee == 3_000);
@@ -45,7 +62,7 @@ suite("FeeManager - Fee Calculation", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 30;
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, quote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, quote));
 
     assert(breakdown.solver_fee == 5_000); // From quote
   });
@@ -55,7 +72,7 @@ suite("FeeManager - Fee Calculation", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 30;
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, quote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, quote));
 
     assert(breakdown.solver_tip == 1_000); // From quote
   });
@@ -65,7 +82,7 @@ suite("FeeManager - Fee Calculation", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 30;
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, quote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, quote));
 
     // Total = protocol_fee + solver_fee + solver_tip = 3000 + 5000 + 1000 = 9000
     assert(breakdown.total_fees == 9_000);
@@ -76,7 +93,7 @@ suite("FeeManager - Fee Calculation", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 30;
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, quote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, quote));
 
     // Net = output_amount - total_fees = 1000_000 - 9000 = 991_000
     assert(breakdown.net_output == 991_000);
@@ -87,7 +104,7 @@ suite("FeeManager - Fee Calculation", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 0;
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, quote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, quote));
 
     assert(breakdown.protocol_fee == 0);
     // Total = 0 + 5000 + 1000 = 6000
@@ -100,7 +117,7 @@ suite("FeeManager - Fee Calculation", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 500; // 5%
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, quote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, quote));
 
     // Protocol fee = 1000_000 * 500 / 10000 = 50_000
     assert(breakdown.protocol_fee == 50_000);
@@ -248,7 +265,7 @@ suite("FeeManager - Fee Rate Calculation", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 30;
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, quote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, quote));
     let rate = FeeManager.effectiveFeeRate(breakdown, outputAmount);
 
     // Total fees = 9000, output = 1000000
@@ -289,7 +306,7 @@ suite("FeeManager - Fee Reasonableness", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 30; // 0.3%
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, quote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, quote));
     let reasonable = FeeManager.areFeesReasonable(breakdown, outputAmount);
 
     assert(reasonable); // 0.9% total < 10%
@@ -309,7 +326,7 @@ suite("FeeManager - Fee Reasonableness", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 0;
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, highFeeQuote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, highFeeQuote));
     let reasonable = FeeManager.areFeesReasonable(breakdown, outputAmount);
 
     // Total = 110_000 = 11% > 10%
@@ -330,7 +347,7 @@ suite("FeeManager - Fee Reasonableness", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 10; // 0.1% -> 1000
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, highButOkQuote);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, highButOkQuote));
     let reasonable = FeeManager.areFeesReasonable(breakdown, outputAmount);
 
     // Total = 1000 + 98000 = 99_000 = 9.9% which is < 1000 bps threshold (10%)
@@ -351,7 +368,7 @@ suite("FeeManager - Fee Reasonableness", func() {
     let outputAmount = 1000_000;
     let protocolFeeBps = 10; // 0.1% -> 1000
 
-    let breakdown = FeeManager.calculateFees(outputAmount, protocolFeeBps, exactTenPercent);
+    let breakdown = unwrapFees(FeeManager.calculateFees(outputAmount, protocolFeeBps, exactTenPercent));
     let reasonable = FeeManager.areFeesReasonable(breakdown, outputAmount);
 
     // Total = 1000 + 99000 = 100_000 = exactly 10% (1000 bps)

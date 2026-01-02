@@ -148,7 +148,7 @@ module {
     switch (config.solver_allowlist) {
       case null { null }; // Permissionless
       case (?allowlist) {
-        let isAllowed = Principal.isController(solver) or checkAllowlist(solver, allowlist);
+        let isAllowed = checkAllowlist(solver, allowlist);
         if (not isAllowed) {
           ?#SolverNotAllowed
         } else {

@@ -397,7 +397,7 @@ persistent actor {
         ignore IntentManager.confirmQuote(state, intentId, solver, alice, currentTime);
 
         // Mark as deposited
-        let result = IntentManager.markDeposited(state, intentId, 100_000, currentTime);
+        let result = IntentManager.markDeposited(state, intentId, alice, 100_000, currentTime);
 
         switch (result) {
           case (#ok(_)) {
@@ -421,9 +421,10 @@ persistent actor {
 
       await test("markDeposited rejects non-existent intent", func() : async () {
         let state = createTestState();
+        let alice = Principal.fromText("aaaaa-aa");
         let currentTime : Time.Time = 1_000_000_000;
 
-        let result = IntentManager.markDeposited(state, 999, 100_000, currentTime);
+        let result = IntentManager.markDeposited(state, 999, alice, 100_000, currentTime);
 
         switch (result) {
           case (#err(#NotFound)) {}; // Expected
@@ -451,7 +452,7 @@ persistent actor {
         };
 
         // Try to mark as deposited without confirming quote first
-        let result = IntentManager.markDeposited(state, intentId, 100_000, currentTime);
+        let result = IntentManager.markDeposited(state, intentId, alice, 100_000, currentTime);
 
         switch (result) {
           case (#err(#InvalidStatus(_))) {}; // Expected
@@ -495,7 +496,7 @@ persistent actor {
         ignore IntentManager.confirmQuote(state, intentId, solver, alice, currentTime);
 
         // Mark as deposited
-        ignore IntentManager.markDeposited(state, intentId, 100_000, currentTime);
+        ignore IntentManager.markDeposited(state, intentId, alice, 100_000, currentTime);
 
         // Try to fulfill - will fail because token ledgers not registered
         let result = await IntentManager.fulfillIntent(state, intentId, currentTime);
@@ -623,7 +624,7 @@ persistent actor {
         };
 
         // Step 4: Deposit verified
-        ignore IntentManager.markDeposited(state, intentId, 100_000, currentTime);
+        ignore IntentManager.markDeposited(state, intentId, alice, 100_000, currentTime);
 
         // Verify Deposited state
         let intent4 = IntentManager.getIntent(state, intentId);

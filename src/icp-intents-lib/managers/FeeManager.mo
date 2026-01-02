@@ -28,11 +28,12 @@ module {
   };
 
   /// Calculate complete fee breakdown
+  /// Returns null if fees exceed output amount
   public func calculateFees(
     output_amount : Nat,
     protocol_fee_bps : Nat,
     quote : Quote
-  ) : FeeBreakdown {
+  ) : ?FeeBreakdown {
     // Calculate protocol fee
     let protocol_fee = Math.calculateBps(output_amount, protocol_fee_bps);
 
@@ -43,10 +44,18 @@ module {
     // Calculate total fees
     let total_fees = protocol_fee + solver_fee + solver_tip;
 
-    // Calculate net output to user
-    let net_output = Nat.sub(output_amount, total_fees);
+    // Validate total fees don't exceed output
+    if (total_fees > output_amount) {
+      return null;
+    };
 
-    {
+    // Calculate net output to user (safe because of check above)
+    let net_output = switch (Math.safeSub(output_amount, total_fees)) {
+      case null { return null }; // Should never happen due to check above
+      case (?net) { net };
+    };
+
+    ?{
       protocol_fee = protocol_fee;
       solver_fee = solver_fee;
       solver_tip = solver_tip;

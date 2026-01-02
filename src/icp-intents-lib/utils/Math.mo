@@ -49,10 +49,13 @@ module {
 
   /// Calculate fee and net amount
   /// Returns (fee, net_amount)
-  public func calculateFee(gross : Nat, fee_bps : Nat) : (Nat, Nat) {
+  /// Returns null if fee would exceed gross amount
+  public func calculateFee(gross : Nat, fee_bps : Nat) : ?(Nat, Nat) {
     let fee = calculateBps(gross, fee_bps);
-    let net = Nat.sub(gross, fee);
-    (fee, net)
+    switch (safeSub(gross, fee)) {
+      case null { null }; // Fee exceeds gross amount
+      case (?net) { ?(fee, net) };
+    }
   };
 
   /// Calculate minimum with zero floor
