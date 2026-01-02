@@ -71,25 +71,23 @@ module {
     actor ("aaaaa-aa")
   };
 
-  /// Extract JSON field value (string)
-  func extractJsonField(json : Text, field : Text) : ?Text {
-    let pattern = "\"" # field # "\":\"";
-    let parts = Text.split(json, #text pattern);
-    let iter = parts;
-    ignore iter.next();
-
-    switch (iter.next()) {
-      case null { null };
-      case (?afterField) {
-        let valueParts = Text.split(afterField, #text "\"");
-        valueParts.next()
-      };
-    }
+  /// JSON field type for extraction
+  type JsonFieldType = {
+    #String;
+    #Number;
+    #ArrayFirst;
   };
 
-  /// Extract first element from JSON array field
-  func extractJsonArrayFirst(json : Text, field : Text) : ?Text {
-    let pattern = "\"" # field # "\":[\"";
+  /// Unified JSON field extractor
+  /// Extracts a field value from JSON text based on field type
+  func extractJsonValue(json : Text, field : Text, fieldType : JsonFieldType) : ?Text {
+    // Build pattern based on field type
+    let pattern = switch (fieldType) {
+      case (#String) { "\"" # field # "\":\"" };
+      case (#Number) { "\"" # field # "\":" };
+      case (#ArrayFirst) { "\"" # field # "\":[\"" };
+    };
+
     let parts = Text.split(json, #text pattern);
     let iter = parts;
     ignore iter.next();
@@ -97,43 +95,49 @@ module {
     switch (iter.next()) {
       case null { null };
       case (?afterField) {
-        let valueParts = Text.split(afterField, #text "\"");
-        valueParts.next()
-      };
-    }
-  };
-
-  /// Extract numeric field from JSON (not quoted)
-  func extractNumericField(json : Text, field : Text) : ?Nat {
-    let pattern = "\"" # field # "\":";
-    let parts = Text.split(json, #text pattern);
-    let iter = parts;
-    ignore iter.next();
-
-    switch (iter.next()) {
-      case null { null };
-      case (?afterField) {
-        // Extract the number before the next comma, }, or whitespace
-        var numStr = "";
-        for (c in afterField.chars()) {
-          if (c == ',' or c == '}' or c == ' ' or c == '\n' or c == '\r') {
-            if (numStr.size() > 0) {
-              return parseNat(numStr);
-            };
+        switch (fieldType) {
+          case (#String or #ArrayFirst) {
+            // Extract value until closing quote
+            let valueParts = Text.split(afterField, #text "\"");
+            valueParts.next()
           };
-          numStr #= Text.fromChar(c);
-        };
-        // End of string
-        if (numStr.size() > 0) {
-          parseNat(numStr)
-        } else {
-          null
+          case (#Number) {
+            // Extract number until delimiter
+            var numStr = "";
+            for (c in afterField.chars()) {
+              if (c == ',' or c == '}' or c == ' ' or c == '\n' or c == '\r') {
+                if (numStr.size() > 0) {
+                  return ?numStr;
+                };
+              };
+              numStr #= Text.fromChar(c);
+            };
+            if (numStr.size() > 0) { ?numStr } else { null }
+          };
         }
       };
     }
   };
 
-  /// Extract daaScore from JSON (wrapper for extractNumericField)
+  /// Extract JSON string field
+  func extractJsonField(json : Text, field : Text) : ?Text {
+    extractJsonValue(json, field, #String)
+  };
+
+  /// Extract first element from JSON array field
+  func extractJsonArrayFirst(json : Text, field : Text) : ?Text {
+    extractJsonValue(json, field, #ArrayFirst)
+  };
+
+  /// Extract numeric field from JSON and parse as Nat
+  func extractNumericField(json : Text, field : Text) : ?Nat {
+    switch (extractJsonValue(json, field, #Number)) {
+      case null { null };
+      case (?numText) { parseNat(numText) };
+    }
+  };
+
+  /// Extract daaScore from JSON (convenience wrapper)
   func extractDaaScore(json : Text) : ?Nat {
     extractNumericField(json, "daaScore")
   };

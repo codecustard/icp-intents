@@ -244,32 +244,79 @@ module {
   };
 
   /// Parse transaction value from JSON response
+  /// Enhanced with validation and error handling
   func parseTransactionValue(json : Text) : ?Nat {
-    // Parse "value":"0x..." from JSON
-    var parts = Iter.toArray(Text.split(json, #text "\"value\":\""));
-    if (parts.size() < 2) {
-      parts := Iter.toArray(Text.split(json, #text "\"value\": \""));
+    // Try both common JSON formatting styles
+    let patterns = [
+      "\"value\":\"",
+      "\"value\": \""
+    ];
+
+    var hexValue : ?Text = null;
+
+    label patternLoop for (pattern in patterns.vals()) {
+      let parts = Iter.toArray(Text.split(json, #text pattern));
+      if (parts.size() >= 2) {
+        let afterValue = parts[1];
+        let valueParts = Iter.toArray(Text.split(afterValue, #text "\""));
+        if (valueParts.size() >= 1) {
+          hexValue := ?valueParts[0];
+          break patternLoop;
+        };
+      };
     };
 
-    if (parts.size() < 2) {
-      return null;
+    switch (hexValue) {
+      case null { null };
+      case (?hex) {
+        // Validate it looks like a hex string before parsing
+        if (not isValidHexString(hex)) {
+          return null;
+        };
+        hexToNat(hex)
+      };
+    }
+  };
+
+  /// Validate hex string format
+  func isValidHexString(hex : Text) : Bool {
+    if (Text.size(hex) == 0) {
+      return false;
     };
 
-    let afterValue = parts[1];
-    let valueParts = Iter.toArray(Text.split(afterValue, #text "\""));
-    if (valueParts.size() < 1) {
-      return null;
+    // Check for 0x prefix
+    if (not Text.startsWith(hex, #text "0x")) {
+      return false;
     };
 
-    let hexValue = valueParts[0];
-    hexToNat(hexValue)
+    // Prevent excessive length (max 66 chars = 0x + 64 hex digits for uint256)
+    if (Text.size(hex) > 66) {
+      return false;
+    };
+
+    // Validate all characters after 0x are valid hex
+    let cleanHex = Text.trimStart(hex, #text "0x");
+    for (c in cleanHex.chars()) {
+      switch (hexCharToNat(c)) {
+        case null { return false };
+        case (?_) {};
+      };
+    };
+
+    true
   };
 
   /// Convert hex string to Nat
+  /// Assumes hex string has already been validated
   func hexToNat(hex : Text) : ?Nat {
     let cleanHex = Text.trimStart(hex, #text "0x");
-    var result : Nat = 0;
 
+    // Empty string after removing 0x
+    if (Text.size(cleanHex) == 0) {
+      return ?0;
+    };
+
+    var result : Nat = 0;
     for (c in cleanHex.chars()) {
       let digit = hexCharToNat(c);
       switch (digit) {
