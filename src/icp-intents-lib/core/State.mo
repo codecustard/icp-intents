@@ -37,7 +37,7 @@ module {
   /// Transition intent to Confirmed status
   public func transitionToConfirmed(intent : Intent, currentTime : Time.Time) : IntentResult<Intent> {
     // Check expiry first
-    if (currentTime > intent.deadline) {
+    if (currentTime >= intent.deadline) {
       return #err(#Expired);
     };
 
@@ -54,7 +54,7 @@ module {
   /// Transition intent to Deposited status
   public func transitionToDeposited(intent : Intent, verifiedAt : Time.Time, currentTime : Time.Time) : IntentResult<Intent> {
     // Check expiry
-    if (currentTime > intent.deadline) {
+    if (currentTime >= intent.deadline) {
       return #err(#Expired);
     };
 

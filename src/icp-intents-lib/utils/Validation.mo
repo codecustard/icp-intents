@@ -20,10 +20,10 @@ module {
       return ?#InvalidAmount("Amount must be greater than zero");
     };
     if (amount < config.min_intent_amount) {
-      return ?#InvalidAmount("Amount below minimum: " # debug_show(config.min_intent_amount));
+      return ?#InvalidAmount("Amount below minimum");
     };
     if (amount > config.max_intent_amount) {
-      return ?#InvalidAmount("Amount exceeds maximum: " # debug_show(config.max_intent_amount));
+      return ?#InvalidAmount("Amount exceeds maximum");
     };
     null
   };
@@ -57,7 +57,7 @@ module {
       return ?#InvalidQuote("Output amount must be greater than zero");
     };
     if (output_amount < min_output) {
-      return ?#InvalidQuote("Output amount below minimum: " # debug_show(min_output));
+      return ?#InvalidQuote("Output amount below minimum");
     };
     // Note: Cannot sanity-check output vs source for cross-chain swaps
     // (different tokens with different values and decimals)

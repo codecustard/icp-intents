@@ -249,6 +249,11 @@ module {
       current_time + one_hour
     };
 
+    // Validate quote expiry is in the future
+    if (quote_expiry <= current_time) {
+      return #err(#InvalidDeadline("Intent deadline already passed"));
+    };
+
     let quote : Quote = {
       solver = solver;
       output_amount = output_amount;

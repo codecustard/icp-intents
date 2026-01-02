@@ -478,13 +478,11 @@ module {
     recipient : Text,
     amount : Nat,
     intent_id : Nat,
+    user : Principal,
     key_name : Text
   ) : async IntentResult<Blob> {
     try {
       // Derive key path
-      // Note: We need the user principal, but UTXO type doesn't store it
-      // This would need to be passed separately or retrieved from intent
-      let user = Principal.fromText("aaaaa-aa"); // Placeholder - should be from context
       let derivation_path = TECDSA.getDerivationPath(intent_id, user);
 
       // Get public key
