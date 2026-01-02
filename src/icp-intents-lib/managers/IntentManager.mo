@@ -21,6 +21,7 @@ import FeeManager "../managers/FeeManager";
 import TokenRegistry "../tokens/TokenRegistry";
 import ICRC2 "../tokens/ICRC2";
 import Validation "../utils/Validation";
+import Constants "../utils/Constants";
 
 module {
   type Intent = Types.Intent;
@@ -242,11 +243,10 @@ module {
     };
 
     // Create quote (expiry = deadline or 1 hour, whichever is sooner)
-    let one_hour = 3_600_000_000_000; // 1 hour in nanoseconds
-    let quote_expiry = if (intent.deadline < current_time + one_hour) {
+    let quote_expiry = if (intent.deadline < current_time + Constants.ONE_HOUR_NANOS) {
       intent.deadline
     } else {
-      current_time + one_hour
+      current_time + Constants.ONE_HOUR_NANOS
     };
 
     // Validate quote expiry is in the future
@@ -324,9 +324,17 @@ module {
       return #err(#Expired);
     };
 
-    // Find quote from solver
-    let selected = Array.find<Quote>(intent.quotes, func(q) { q.solver == solver });
-    let quote = switch (selected) {
+    // Find quote from solver and get its index
+    var quoteIndex : Nat = 0;
+    var foundQuote : ?Quote = null;
+    for (i in Iter.range(0, intent.quotes.size() - 1)) {
+      if (intent.quotes[i].solver == solver) {
+        quoteIndex := i;
+        foundQuote := ?intent.quotes[i];
+      };
+    };
+
+    let quote = switch (foundQuote) {
       case null { return #err(#NotFound) };
       case (?q) { q };
     };
@@ -350,12 +358,23 @@ module {
 
     state.intents.put(intent_id, updated_intent);
 
+    // Get deposit address (either generated or from quote)
+    let depositAddress = switch (quote.solver_dest_address) {
+      case (?addr) { addr };
+      case null {
+        // Generate deposit address for source chain
+        // Note: This would require chain-specific address generation
+        // For now, use empty string but this should be implemented
+        ""
+      };
+    };
+
     // Log event
     state.event_logger.emit(#QuoteConfirmed({
       intent_id = intent_id;
       solver = solver;
-      quote_index = 0; // Placeholder - should track actual index
-      deposit_address = ""; // Should be generated
+      quote_index = quoteIndex;
+      deposit_address = depositAddress;
       timestamp = current_time;
     }));
 
@@ -364,6 +383,26 @@ module {
   };
 
   /// Mark intent as deposited (after verification)
+  ///
+  /// Transitions an intent to Deposited status and locks the verified amount in escrow.
+  /// Must be called by the intent creator after deposit verification on the source chain.
+  ///
+  /// **Security**: Validates caller is the intent creator. Locks escrow before state transition
+  /// to prevent race conditions. Rolls back escrow if state transition fails.
+  ///
+  /// Parameters:
+  /// - `state`: The manager state
+  /// - `intent_id`: ID of the intent to mark as deposited
+  /// - `caller`: Principal calling this function (must be intent creator)
+  /// - `verified_amount`: Amount verified on the source chain
+  /// - `current_time`: Current timestamp
+  ///
+  /// Returns:
+  /// - `#ok(())` on success
+  /// - `#err(#NotFound)` if intent doesn't exist
+  /// - `#err(#NotIntentCreator)` if caller is not the intent creator
+  /// - `#err(#InvalidStatus)` if intent is not in Confirmed status
+  /// - `#err(#Expired)` if intent has expired
   public func markDeposited(
     state : ManagerState,
     intent_id : Nat,

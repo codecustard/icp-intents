@@ -5,6 +5,7 @@
 import Types "../core/Types";
 import Errors "../core/Errors";
 import Math "./Math";
+import Constants "./Constants";
 import Time "mo:base/Time";
 import Text "mo:base/Text";
 import Char "mo:base/Char";
@@ -89,7 +90,7 @@ module {
     if (not Text.startsWith(address, #text "0x")) {
       return ?#InvalidAddress("Ethereum address must start with 0x");
     };
-    if (Text.size(address) != 42) {
+    if (Text.size(address) != Constants.ETH_ADDRESS_LENGTH) {
       return ?#InvalidAddress("Ethereum address must be 42 characters");
     };
     // Check hex characters
@@ -112,7 +113,7 @@ module {
     if (not (Text.startsWith(normalized, #text "Hoosat:") or Text.startsWith(normalized, #text "hoosat:"))) {
       return ?#InvalidAddress("Hoosat address must start with 'Hoosat:' or 'hoosat:'");
     };
-    if (Text.size(normalized) < 50) {
+    if (Text.size(normalized) < Constants.HOOSAT_MIN_ADDRESS_LENGTH) {
       return ?#InvalidAddress("Hoosat address too short");
     };
     null
@@ -121,7 +122,7 @@ module {
   /// Validate Bitcoin address format (basic check)
   public func validateBitcoinAddress(address : Text) : ?IntentError {
     let size = Text.size(address);
-    if (size < 26 or size > 62) {
+    if (size < Constants.BITCOIN_MIN_ADDRESS_LENGTH or size > Constants.BITCOIN_MAX_ADDRESS_LENGTH) {
       return ?#InvalidAddress("Bitcoin address length invalid");
     };
     // More specific validation would check prefix (1, 3, bc1, etc.)
@@ -163,7 +164,7 @@ module {
     if (bps > Math.MAX_BPS) {
       return ?#InvalidFee("Protocol fee exceeds 100%");
     };
-    if (bps > 1000) { // 10%
+    if (bps > Constants.MAX_REASONABLE_PROTOCOL_FEE_BPS) {
       return ?#InvalidFee("Protocol fee too high (>10%)");
     };
     null

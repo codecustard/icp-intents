@@ -4,6 +4,7 @@
 
 import Types "../core/Types";
 import Math "../utils/Math";
+import Constants "../utils/Constants";
 import HashMap "mo:base/HashMap";
 import Text "mo:base/Text";
 import Iter "mo:base/Iter";
@@ -28,7 +29,20 @@ module {
   };
 
   /// Calculate complete fee breakdown
-  /// Returns null if fees exceed output amount
+  ///
+  /// Computes protocol fee, solver fee, solver tip, and net output for an intent fulfillment.
+  ///
+  /// **Security**: Validates total fees don't exceed output amount to prevent underflow.
+  /// Returns null if fees are invalid, preventing transaction from completing.
+  ///
+  /// Parameters:
+  /// - `output_amount`: Total amount the solver will provide
+  /// - `protocol_fee_bps`: Protocol fee in basis points (e.g., 30 = 0.3%)
+  /// - `quote`: The selected quote containing solver fee and tip
+  ///
+  /// Returns:
+  /// - `?FeeBreakdown` with all fees calculated if valid
+  /// - `null` if total fees exceed output amount
   public func calculateFees(
     output_amount : Nat,
     protocol_fee_bps : Nat,
@@ -137,6 +151,6 @@ module {
   /// Check if fees are reasonable (< 10%)
   public func areFeesReasonable(fees : FeeBreakdown, output_amount : Nat) : Bool {
     let rate = effectiveFeeRate(fees, output_amount);
-    rate < 1000 // Less than 10%
+    rate < Constants.MAX_REASONABLE_TOTAL_FEE_BPS
   };
 }

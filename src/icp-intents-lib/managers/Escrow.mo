@@ -46,6 +46,22 @@ module {
   };
 
   /// Lock funds in escrow
+  ///
+  /// Records that a user has deposited funds that should be held in escrow.
+  /// This is internal accounting only - actual token transfers happen separately.
+  ///
+  /// **Security**: Validates amount > 0. Updates both user balance and total locked
+  /// for the token to maintain invariants.
+  ///
+  /// Parameters:
+  /// - `state`: The escrow state
+  /// - `user`: Principal of the user locking funds
+  /// - `token`: Token symbol (e.g., "ICP", "ckBTC")
+  /// - `amount`: Amount to lock in token's base units
+  ///
+  /// Returns:
+  /// - `#ok(())` on success
+  /// - `#err(#InvalidAmount)` if amount is zero
   public func lock(
     state : EscrowState,
     user : Principal,

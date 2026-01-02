@@ -21,6 +21,7 @@ import Types "../core/Types";
 import ChainTypes "../chains/ChainTypes";
 import TECDSA "../crypto/TECDSA";
 import Cycles "../utils/Cycles";
+import Constants "../utils/Constants";
 
 module {
   type IntentResult<T> = Types.IntentResult<T>;
@@ -521,8 +522,8 @@ module {
         HoosatAddress.ECDSA
       );
 
-      // Build transaction (2000 hootas fee)
-      let fee : Nat64 = 2000;
+      // Build transaction
+      let fee : Nat64 = Constants.HOOSAT_DEFAULT_FEE;
       let tx = HoosatTransaction.build_transaction(
         hoosatUtxo,
         recipientScript,
