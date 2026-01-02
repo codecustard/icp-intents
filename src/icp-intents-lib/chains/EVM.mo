@@ -352,6 +352,25 @@ module {
   };
 
   /// Verify EVM deposit transaction
+  ///
+  /// Verifies an EVM transaction using HTTP outcalls to RPC providers.
+  ///
+  /// **Error Handling**: Uses automatic retry with multi-provider consensus via EVM RPC canister.
+  /// The EVM RPC canister handles provider failover internally. Individual RPC errors are
+  /// logged but don't cause immediate failure - we only fail if all providers fail.
+  ///
+  /// Transient errors (network timeouts, rate limits) are handled by:
+  /// 1. EVM RPC canister's built-in multi-provider retry
+  /// 2. Graceful degradation (return #Pending instead of #Failed when possible)
+  ///
+  /// Parameters:
+  /// - `config`: EVM verification configuration
+  /// - `request`: Verification request with proof and expected values
+  ///
+  /// Returns:
+  /// - `#Success` if transaction is verified with enough confirmations
+  /// - `#Pending` if transaction exists but lacks confirmations or data unavailable
+  /// - `#Failed` if transaction validation fails or critical RPC errors occur
   public func verify(config : Config, request : VerificationRequest) : async VerificationResult {
     // Note: Cycles are provided with each RPC call via the EVM RPC canister
 
@@ -376,6 +395,7 @@ module {
 
     try {
       // Get transaction receipt (with cycles for RPC call)
+      // EVM RPC canister handles multi-provider retry internally
       let receipt_response = await (with cycles = 1_000_000_000) rpc.eth_getTransactionReceipt(
         rpc_services,
         ?{ responseSizeEstimate = ?1000; responseConsensus = null },
@@ -385,6 +405,9 @@ module {
       let receipt = switch (extractReceipt(receipt_response)) {
         case (?r) { r };
         case null {
+          // Receipt not found - could be pending or invalid tx
+          // Return Pending rather than Failed to allow retry
+          Debug.print("EVM: Receipt not found for tx " # proof.tx_hash # " - returning Pending");
           return #Pending({
             current_confirmations = 0;
             required_confirmations = config.min_confirmations;
@@ -406,8 +429,12 @@ module {
           parseTransactionValue(json)
         };
         case null {
-          Debug.print("EVM: No transaction response");
-          null
+          Debug.print("EVM: No transaction response - returning Pending");
+          // Transaction data unavailable - return Pending to allow retry
+          return #Pending({
+            current_confirmations = 0;
+            required_confirmations = config.min_confirmations;
+          });
         };
       };
 
@@ -430,31 +457,65 @@ module {
               // Try JSON-RPC format: {"result":"0x..."}
               let parts = Iter.toArray(Text.split(json, #text "\"result\":\""));
               if (parts.size() < 2) {
-                return #Failed("Could not parse current block number from: " # json);
+                Debug.print("EVM: Could not parse block number - returning Pending");
+                return #Pending({
+                  current_confirmations = 0;
+                  required_confirmations = config.min_confirmations;
+                });
               };
               let afterResult = parts[1];
               let resultParts = Iter.toArray(Text.split(afterResult, #text "\""));
               if (resultParts.size() < 1) {
-                return #Failed("Could not extract block number");
+                Debug.print("EVM: Could not extract block number - returning Pending");
+                return #Pending({
+                  current_confirmations = 0;
+                  required_confirmations = config.min_confirmations;
+                });
               };
               switch (hexToNat(resultParts[0])) {
                 case (?n) { n };
                 case null {
-                  return #Failed("Invalid block number format");
+                  Debug.print("EVM: Invalid block number format - returning Pending");
+                  return #Pending({
+                    current_confirmations = 0;
+                    required_confirmations = config.min_confirmations;
+                  });
                 };
               }
             };
           }
         };
         case null {
-          return #Failed("Failed to get current block number");
+          Debug.print("EVM: Failed to get current block number - returning Pending");
+          // Block number unavailable - return Pending to allow retry
+          return #Pending({
+            current_confirmations = 0;
+            required_confirmations = config.min_confirmations;
+          });
         };
       };
 
       // Validate the transaction
       return validateTransaction(receipt, tx_value, request.expected_address, request.expected_amount, proof.tx_hash, current_block, config.min_confirmations)
     } catch (e) {
-      #Failed("RPC call failed: " # Error.message(e))
+      // Catch block for catastrophic failures (canister unreachable, etc.)
+      // Log detailed error and return Pending to allow retry
+      let errorMsg = Error.message(e);
+      Debug.print("EVM: RPC call exception: " # errorMsg);
+
+      // Check if this is a transient error that should return Pending
+      if (Text.contains(errorMsg, #text "timeout") or
+          Text.contains(errorMsg, #text "unavailable") or
+          Text.contains(errorMsg, #text "overloaded")) {
+        Debug.print("EVM: Transient error detected - returning Pending");
+        return #Pending({
+          current_confirmations = 0;
+          required_confirmations = config.min_confirmations;
+        });
+      };
+
+      // For other errors, fail with detailed message
+      #Failed("RPC call failed: " # errorMsg)
     }
   };
 

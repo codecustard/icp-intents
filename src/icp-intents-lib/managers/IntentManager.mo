@@ -471,6 +471,21 @@ module {
   };
 
   /// Fulfill an intent (release escrow to solver)
+  ///
+  /// Completes an intent by transferring tokens to the solver and releasing escrow.
+  ///
+  /// **Security**: Performs risky async operations (token transfer) BEFORE state changes.
+  /// This ensures that if the transfer fails, no state changes have occurred.
+  /// Releases escrow after state transition with proper error handling.
+  ///
+  /// Parameters:
+  /// - `state`: The manager state
+  /// - `intent_id`: ID of the intent to fulfill
+  /// - `current_time`: Current timestamp
+  ///
+  /// Returns:
+  /// - `#ok(FeeBreakdown)` with fee details on success
+  /// - `#err(...)` if validation fails, transfer fails, or state transition fails
   public func fulfillIntent(
     state : ManagerState,
     intent_id : Nat,
@@ -486,14 +501,15 @@ module {
       case (?q) { q };
     };
 
-    // Transition to Fulfilled
+    // Validate state transition is possible BEFORE any operations
+    // This ensures we fail fast if intent is in wrong state
     let transitioned = State.transitionToFulfilled(intent, current_time);
     let new_intent = switch (transitioned) {
       case (#err(e)) { return #err(e) };
       case (#ok(i)) { i };
     };
 
-    // Calculate fees
+    // Calculate fees BEFORE any async operations
     let fees = switch (FeeManager.calculateFees(
       quote.output_amount,
       intent.protocol_fee_bps,
@@ -503,7 +519,9 @@ module {
       case (?f) { f };
     };
 
-    // Transfer tokens to solver (destination tokens)
+    // Transfer tokens to solver (risky async operation)
+    // State transition has been validated but NOT committed yet
+    // If this fails, no state changes have occurred
     switch (await releaseToSolver(state, intent, quote.solver, fees.net_output)) {
       case (#err(e)) {
         Debug.print("Failed to release tokens to solver: " # debug_show(e));
@@ -516,7 +534,11 @@ module {
 
     // Release escrow (internal accounting)
     switch (Escrow.release(state.escrow, intent.user, intent.source.token, intent.escrow_balance)) {
-      case (#err(e)) { return #err(e) };
+      case (#err(e)) {
+        // NOTE: This is a critical error - escrow accounting is now inconsistent
+        Debug.print("⚠️ CRITICAL: Failed to release escrow for intent #" # Nat.toText(intent_id));
+        return #err(e);
+      };
       case (#ok(())) {};
     };
 
@@ -565,6 +587,22 @@ module {
   };
 
   /// Cancel an intent
+  ///
+  /// Cancels an intent and refunds any deposited tokens to the user.
+  ///
+  /// **Security**: Performs risky async operations (token refund) BEFORE state changes.
+  /// This ensures that if the refund fails, no state changes have occurred.
+  /// Releases escrow after state transition with proper error handling.
+  ///
+  /// Parameters:
+  /// - `state`: The manager state
+  /// - `intent_id`: ID of the intent to cancel
+  /// - `user`: Principal requesting cancellation (must be intent creator)
+  /// - `current_time`: Current timestamp
+  ///
+  /// Returns:
+  /// - `#ok(())` on success
+  /// - `#err(...)` if validation fails, refund fails, or state transition fails
   public func cancelIntent(
     state : ManagerState,
     intent_id : Nat,
@@ -581,14 +619,17 @@ module {
       return #err(#NotIntentCreator);
     };
 
-    // Transition to Cancelled
+    // Validate state transition is possible BEFORE any operations
+    // This ensures we fail fast if intent cannot be cancelled
     let transitioned = State.transitionToCancelled(intent);
     let new_intent = switch (transitioned) {
       case (#err(e)) { return #err(e) };
       case (#ok(i)) { i };
     };
 
-    // Refund tokens to user if deposited
+    // Refund tokens to user if deposited (risky async operation)
+    // State transition has been validated but NOT committed yet
+    // If this fails, no state changes have occurred
     if (intent.escrow_balance > 0) {
       // Transfer tokens back to user
       switch (await refundToUser(state, intent)) {
@@ -600,10 +641,16 @@ module {
           Debug.print("Refunded " # Nat.toText(intent.escrow_balance) # " " # intent.source.token # " to user");
         };
       };
+    };
 
-      // Release escrow (internal accounting)
+    // Release escrow (internal accounting) if there was a balance
+    if (intent.escrow_balance > 0) {
       switch (Escrow.release(state.escrow, intent.user, intent.source.token, intent.escrow_balance)) {
-        case (#err(e)) { return #err(e) };
+        case (#err(e)) {
+          // NOTE: This is a critical error - escrow accounting is now inconsistent
+          Debug.print("⚠️ CRITICAL: Failed to release escrow for intent #" # Nat.toText(intent_id));
+          return #err(e);
+        };
         case (#ok(())) {};
       };
     };
@@ -664,7 +711,23 @@ module {
   };
 
   /// Deposit tokens from user to canister (after quote confirmation)
-  /// User must have already called approve() on the token ledger
+  ///
+  /// Transfers tokens from user to canister and updates escrow accounting.
+  ///
+  /// **Security**: User must have already called approve() on the token ledger.
+  /// The ICRC-2 transferFrom is NON-REVERSIBLE - if markDeposited fails after
+  /// successful transfer, tokens will be stuck in canister without escrow accounting.
+  /// This critical failure is logged and requires manual recovery by admin.
+  ///
+  /// Parameters:
+  /// - `state`: The manager state
+  /// - `intent_id`: ID of the intent to deposit for
+  /// - `canister_principal`: Principal of this canister (for transferFrom)
+  /// - `current_time`: Current timestamp
+  ///
+  /// Returns:
+  /// - `#ok(block_index)` on success with ledger block index
+  /// - `#err(...)` if validation fails, transfer fails, or escrow lock fails
   public func depositTokens(
     state : ManagerState,
     intent_id : Nat,
@@ -699,9 +762,21 @@ module {
     )) {
       case (#err(e)) { #err(e) };
       case (#ok(block_index)) {
-        // Mark intent as deposited
+        // Mark intent as deposited (locks escrow)
         switch (markDeposited(state, intent_id, intent.user, intent.source_amount, current_time)) {
-          case (#err(e)) { #err(e) };
+          case (#err(e)) {
+            // CRITICAL: Tokens were transferred but escrow lock failed
+            // Tokens are now in canister but not tracked in escrow
+            // This requires manual recovery by admin
+            Debug.print("🚨 CRITICAL FAILURE: Tokens transferred but escrow lock failed for intent #" # Nat.toText(intent_id));
+            Debug.print("🚨 User: " # Principal.toText(intent.user));
+            Debug.print("🚨 Token: " # intent.source.token);
+            Debug.print("🚨 Amount: " # Nat.toText(intent.source_amount));
+            Debug.print("🚨 Block Index: " # Nat.toText(block_index));
+            Debug.print("🚨 Error: " # debug_show(e));
+            Debug.print("🚨 Manual recovery required - admin must refund or lock escrow manually");
+            #err(e)
+          };
           case (#ok(())) {
             Debug.print("Deposited " # Nat.toText(intent.source_amount) # " " # intent.source.token # " for intent " # Nat.toText(intent_id));
             #ok(block_index)

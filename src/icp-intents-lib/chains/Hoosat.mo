@@ -180,6 +180,27 @@ module {
   };
 
   /// Verify Hoosat UTXO deposit
+  ///
+  /// Verifies a Hoosat UTXO transaction using HTTP outcalls to Hoosat RPC.
+  ///
+  /// **Error Handling**: Implements graceful degradation for transient errors.
+  /// Returns #Pending instead of #Failed when data is temporarily unavailable,
+  /// allowing the caller to retry later.
+  ///
+  /// Transient errors handled:
+  /// 1. HTTP 5xx errors (server errors) - return Pending
+  /// 2. HTTP 429 (rate limit) - return Pending
+  /// 3. Timeout exceptions - return Pending
+  /// 4. Missing data in valid responses - return Pending
+  ///
+  /// Parameters:
+  /// - `config`: Hoosat verification configuration with RPC URL
+  /// - `request`: Verification request with proof and expected values
+  ///
+  /// Returns:
+  /// - `#Success` if UTXO is verified with enough confirmations
+  /// - `#Pending` if transaction exists but lacks confirmations or data unavailable
+  /// - `#Failed` if transaction validation fails or unrecoverable errors occur
   public func verify(config : Config, request : VerificationRequest) : async VerificationResult {
     // Note: Cycles are provided with each HTTP outcall using 'with cycles = X'
 
@@ -217,7 +238,25 @@ module {
         is_replicated = ?false;
       });
 
+      // Check for transient HTTP errors that should return Pending
+      if (httpResponse.status == 429) {
+        Debug.print("Hoosat: Rate limited (429) - returning Pending");
+        return #Pending({
+          current_confirmations = 0;
+          required_confirmations = config.min_confirmations;
+        });
+      };
+
+      if (httpResponse.status >= 500 and httpResponse.status < 600) {
+        Debug.print("Hoosat: Server error " # Nat.toText(httpResponse.status) # " - returning Pending");
+        return #Pending({
+          current_confirmations = 0;
+          required_confirmations = config.min_confirmations;
+        });
+      };
+
       if (httpResponse.status != 200) {
+        // Non-transient client error (4xx except 429)
         return #Failed("Hoosat API error: " # Nat.toText(httpResponse.status));
       };
 
@@ -278,6 +317,15 @@ module {
         is_replicated = ?false;
       });
 
+      // Handle transient errors for transaction details request
+      if (txResponse.status == 429 or (txResponse.status >= 500 and txResponse.status < 600)) {
+        Debug.print("Hoosat: Transient error fetching tx details (" # Nat.toText(txResponse.status) # ") - returning Pending");
+        return #Pending({
+          current_confirmations = 0;
+          required_confirmations = config.min_confirmations;
+        });
+      };
+
       if (txResponse.status != 200) {
         return #Failed("Failed to fetch transaction details: " # Nat.toText(txResponse.status));
       };
@@ -336,6 +384,15 @@ module {
         is_replicated = ?false;
       });
 
+      // Handle transient errors for block details request
+      if (blockResponse.status == 429 or (blockResponse.status >= 500 and blockResponse.status < 600)) {
+        Debug.print("Hoosat: Transient error fetching block details (" # Nat.toText(blockResponse.status) # ") - returning Pending");
+        return #Pending({
+          current_confirmations = 0;
+          required_confirmations = config.min_confirmations;
+        });
+      };
+
       if (blockResponse.status != 200) {
         return #Failed("Failed to fetch block details: " # Nat.toText(blockResponse.status));
       };
@@ -390,6 +447,15 @@ module {
         transform = null;
         is_replicated = ?false;
       });
+
+      // Handle transient errors for chain info request
+      if (infoResponse.status == 429 or (infoResponse.status >= 500 and infoResponse.status < 600)) {
+        Debug.print("Hoosat: Transient error fetching chain info (" # Nat.toText(infoResponse.status) # ") - returning Pending");
+        return #Pending({
+          current_confirmations = 0;
+          required_confirmations = config.min_confirmations;
+        });
+      };
 
       if (infoResponse.status != 200) {
         return #Failed("Failed to fetch chain info: " # Nat.toText(infoResponse.status));
@@ -451,7 +517,26 @@ module {
         timestamp = 0; // Should be set by caller
       })
     } catch (e) {
-      #Failed("HTTP request failed: " # Error.message(e))
+      // Catch block for catastrophic failures (canister unreachable, etc.)
+      // Log detailed error and determine if it's transient
+      let errorMsg = Error.message(e);
+      Debug.print("Hoosat: HTTP request exception: " # errorMsg);
+
+      // Check if this is a transient error that should return Pending
+      if (Text.contains(errorMsg, #text "timeout") or
+          Text.contains(errorMsg, #text "unavailable") or
+          Text.contains(errorMsg, #text "overloaded") or
+          Text.contains(errorMsg, #text "rejected") or
+          Text.contains(errorMsg, #text "temporary")) {
+        Debug.print("Hoosat: Transient error detected - returning Pending");
+        return #Pending({
+          current_confirmations = 0;
+          required_confirmations = config.min_confirmations;
+        });
+      };
+
+      // For other errors, fail with detailed message
+      #Failed("HTTP request failed: " # errorMsg)
     }
   };
 
