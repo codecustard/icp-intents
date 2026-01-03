@@ -745,17 +745,32 @@ The SDK has undergone comprehensive security hardening with the following improv
    - Added `user: Principal` parameter for proper key derivation
    - Location: `chains/Hoosat.mo:116`
 
+9. **State Rollback Patterns**
+   - Formalized fail-fast validation across all async state-changing operations
+   - Prevents partial state mutations when async operations fail
+   - Pattern: Validate state transition → Perform risky async operation → Commit state
+   - Locations: `managers/IntentManager.mo:489-590` (fulfillIntent), `606-685` (cancelIntent), `719-793` (depositTokens)
+   - Critical error logging for irrecoverable state inconsistencies
+
+10. **HTTP Outcall Resilience**
+    - Implemented graceful degradation for transient network failures
+    - Returns `#Pending` instead of `#Failed` for transient errors (rate limits, timeouts, server errors)
+    - Allows automatic retry on temporary failures
+    - EVM: Leverages multi-provider consensus via EVM RPC canister
+    - Hoosat: Handles HTTP 429, 5xx errors, timeout exceptions across all 4 outcalls
+    - Locations: `chains/EVM.mo:354-520`, `chains/Hoosat.mo:182-541`
+
 **Code Quality Improvements (v0.2.0):**
 
-9. **Centralized Constants**
-   - Created `utils/Constants.mo` for magic number elimination
-   - Reduces configuration errors and improves maintainability
+11. **Centralized Constants**
+    - Created `utils/Constants.mo` for magic number elimination
+    - Reduces configuration errors and improves maintainability
 
-10. **Event Data Accuracy**
+12. **Event Data Accuracy**
     - Fixed placeholder values in `QuoteConfirmed` events
     - Tracks actual `quote_index` and `deposit_address` for off-chain indexing
 
-11. **Consolidated JSON Parsing**
+13. **Consolidated JSON Parsing**
     - Unified duplicate parsing logic in `Hoosat.mo`
     - Improved type safety with validation in `EVM.mo`
 

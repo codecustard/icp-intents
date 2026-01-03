@@ -64,6 +64,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Location**: `chains/Hoosat.mo:116`
 - **Breaking**: `buildTransaction()` now requires `user: Principal` parameter
 
+#### Formalized State Rollback Patterns (HIGH)
+- **Issue**: Async state-changing operations could leave partial state mutations on failure
+- **Impact**: State inconsistencies, potential fund loss, escrow accounting errors
+- **Fix**: Implemented fail-fast validation pattern across all async operations
+- **Pattern**: Validate state transition → Perform risky async operation → Commit state
+- **Changes**:
+  - `fulfillIntent()`: Validates state BEFORE token transfer, clean rollback on failure
+  - `cancelIntent()`: Validates state BEFORE token refund, clean rollback on failure
+  - `depositTokens()`: Acknowledges ICRC-2 non-reversibility, logs CRITICAL failures
+- **Locations**:
+  - `managers/IntentManager.mo:489-590` (fulfillIntent)
+  - `managers/IntentManager.mo:606-685` (cancelIntent)
+  - `managers/IntentManager.mo:719-793` (depositTokens)
+- **Benefits**: Eliminates partial state mutations, prevents fund loss, maintains consistency
+
+#### Improved HTTP Outcall Resilience (HIGH)
+- **Issue**: Transient network failures caused permanent verification failures
+- **Impact**: Valid transactions rejected due to temporary RPC issues, poor UX
+- **Fix**: Graceful degradation - return `#Pending` for transient errors instead of `#Failed`
+- **Transient Errors Handled**:
+  - HTTP 429 (rate limit)
+  - HTTP 5xx (server errors)
+  - Timeout/unavailable/overloaded exceptions
+  - Missing data in valid responses
+- **EVM Changes** (`chains/EVM.mo:354-520`):
+  - Leverages EVM RPC canister's multi-provider consensus
+  - Returns `#Pending` for: receipt not found, tx data unavailable, block number parsing failures
+  - Distinguishes transient errors from validation failures
+- **Hoosat Changes** (`chains/Hoosat.mo:182-541`):
+  - Handles transient errors across all 4 HTTP outcalls (UTXO list, tx details, block details, chain info)
+  - Returns `#Pending` for HTTP 429, 5xx, and exception keywords
+- **Benefits**: Automatic retry on temporary failures, improved reliability, better UX
+
 ### ✨ Code Quality Improvements
 
 #### Centralized Magic Numbers
