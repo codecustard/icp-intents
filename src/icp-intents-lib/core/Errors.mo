@@ -34,6 +34,7 @@ module {
     #InvalidToken : Text;
     #InvalidQuote : Text;
     #InvalidFee : Text;
+    #RateLimitExceeded : Text;
 
     // Escrow errors
     #InsufficientBalance;
@@ -86,6 +87,7 @@ module {
       case (#InvalidToken(msg)) { "Invalid token: " # msg };
       case (#InvalidQuote(msg)) { "Invalid quote: " # msg };
       case (#InvalidFee(msg)) { "Invalid fee: " # msg };
+      case (#RateLimitExceeded(msg)) { "Rate limit exceeded: " # msg };
 
       case (#InsufficientBalance) { "Insufficient balance" };
       case (#EscrowLockFailed(msg)) { "Failed to lock escrow: " # msg };

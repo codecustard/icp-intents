@@ -97,6 +97,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Returns `#Pending` for HTTP 429, 5xx, and exception keywords
 - **Benefits**: Automatic retry on temporary failures, improved reliability, better UX
 
+### 🔒 Security - Low Priority Fixes
+
+#### Added Rate Limiting and DoS Prevention (LOW)
+- **Issue**: No per-user intent limits, no cycle tracking, unbounded HashMap growth
+- **Impact**: Potential memory/cycle exhaustion, resource abuse
+- **Fix**: Multi-layer defense-in-depth approach
+- **Rate Limits Implemented**:
+  - Per-user total intent limit: 100
+  - Per-user active intent limit: 20
+  - Global total intent limit: 10,000
+  - Global active intent limit: 5,000
+- **Tracking Added**:
+  - User intent counts (total and active per user)
+  - Cycle consumption tracking
+  - Cleanup mechanism for terminal intents (7-day retention)
+- **Monitoring Functions**:
+  - `cleanupTerminalIntents()` - Remove old terminal intents
+  - `getIntentStats()` - Get intent statistics
+  - `getUserCycleBudget()` - Get user's capacity info
+  - `getCycleStats()` - Get system capacity status
+- **Locations**:
+  - `utils/RateLimits.mo` (NEW) - Rate limit constants
+  - `managers/IntentManager.mo` - Rate checking, counter tracking, cleanup
+  - `core/Errors.mo` - Added `#RateLimitExceeded` error variant
+  - `IntentLib.mo` - Exported monitoring functions
+
+#### Enhanced JSON Parsing Security (LOW)
+- **Issue**: No field length validation, no numeric bounds checking
+- **Impact**: Potential memory exhaustion from malicious RPC responses
+- **Fix**: Added comprehensive validation at extraction and parsing layers
+- **Field Length Limits**:
+  - TX hash: 100 characters max
+  - Block hash: 100 characters max
+  - Address: 120 characters max
+  - Generic JSON field: 256 characters max
+- **Numeric Bounds**:
+  - Block height/number: 2^53 - 1 (JavaScript safe integer limit)
+  - Token amounts: 2^80 (supports very large amounts)
+  - Confirmations: 100,000 max
+- **Validation Functions**:
+  - `validateFieldLength()` - Check string length limits
+  - `validateNumericBounds()` - Check numeric value bounds
+  - `parseNatSafe()` / `hexToNatSafe()` - Safe parsing with overflow detection
+- **Locations**:
+  - `utils/Constants.mo` - JSON parsing security limits
+  - `chains/Hoosat.mo` - Field validation, safe parsing
+  - `chains/EVM.mo` - Field validation, safe parsing
+
 ### ✨ Code Quality Improvements
 
 #### Centralized Magic Numbers

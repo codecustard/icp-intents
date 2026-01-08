@@ -760,23 +760,41 @@ The SDK has undergone comprehensive security hardening with the following improv
     - Hoosat: Handles HTTP 429, 5xx errors, timeout exceptions across all 4 outcalls
     - Locations: `chains/EVM.mo:354-520`, `chains/Hoosat.mo:182-541`
 
+**Low Priority Fixes (v0.2.0):**
+
+11. **Rate Limiting and DoS Prevention**
+    - Multi-layer defense-in-depth approach to prevent resource exhaustion
+    - Rate limits: 100 intents/user total, 20 active/user, 10K global total, 5K global active
+    - Per-user intent tracking (total and active counts)
+    - Cycle consumption tracking and monitoring
+    - Cleanup mechanism for terminal intents (7-day retention)
+    - Monitoring functions: `cleanupTerminalIntents()`, `getIntentStats()`, `getUserCycleBudget()`, `getCycleStats()`
+    - Locations: `utils/RateLimits.mo` (NEW), `managers/IntentManager.mo`, `core/Errors.mo`, `IntentLib.mo`
+
+12. **JSON Parsing Security**
+    - Field length limits: TX hash (100), block hash (100), address (120), generic field (256)
+    - Numeric bounds: Block height (2^53-1), amounts (2^80), confirmations (100K)
+    - Safe parsing with overflow detection: `parseNatSafe()`, `hexToNatSafe()`
+    - Validation functions: `validateFieldLength()`, `validateNumericBounds()`
+    - Locations: `utils/Constants.mo`, `chains/Hoosat.mo`, `chains/EVM.mo`
+
 **Code Quality Improvements (v0.2.0):**
 
-11. **Centralized Constants**
+13. **Centralized Constants**
     - Created `utils/Constants.mo` for magic number elimination
     - Reduces configuration errors and improves maintainability
 
-12. **Event Data Accuracy**
+14. **Event Data Accuracy**
     - Fixed placeholder values in `QuoteConfirmed` events
     - Tracks actual `quote_index` and `deposit_address` for off-chain indexing
 
-13. **Consolidated JSON Parsing**
+15. **Consolidated JSON Parsing**
     - Unified duplicate parsing logic in `Hoosat.mo`
     - Improved type safety with validation in `EVM.mo`
 
 ### Pre-Production Checklist
 
-- [x] ~~Security review~~ ✅ Complete - Critical and high priority issues resolved
+- [x] ~~Security review~~ ✅ Complete - All 12 security issues resolved (3 critical + 7 high + 2 low)
 - [ ] External security audit
 - [ ] Load testing (1000+ intents)
 - [ ] Upgrade testing

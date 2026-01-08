@@ -133,7 +133,7 @@ module {
   func extractNumericField(json : Text, field : Text) : ?Nat {
     switch (extractJsonValue(json, field, #Number)) {
       case null { null };
-      case (?numText) { parseNat(numText) };
+      case (?numText) { parseNatSafe(numText, Constants.MAX_BLOCK_HEIGHT) };
     }
   };
 
@@ -160,6 +160,57 @@ module {
         case _ { return null };
       };
       num := num * 10 + digit;
+    };
+    ?num
+  };
+
+  /// Validate field length against maximum
+  func validateFieldLength(fieldName : Text, value : Text, maxLength : Nat) : Bool {
+    let len = Text.size(value);
+    if (len > maxLength) {
+      Debug.print("Security: " # fieldName # " exceeds max length " # Nat.toText(maxLength) # " (got " # Nat.toText(len) # ")");
+      return false;
+    };
+    true
+  };
+
+  /// Validate numeric value against maximum bound
+  func validateNumericBounds(fieldName : Text, value : Nat, maxValue : Nat) : Bool {
+    if (value > maxValue) {
+      Debug.print("Security: " # fieldName # " exceeds max value " # Nat.toText(maxValue) # " (got " # Nat.toText(value) # ")");
+      return false;
+    };
+    true
+  };
+
+  /// Safe Nat parsing with overflow protection
+  func parseNatSafe(text : Text, maxValue : Nat) : ?Nat {
+    var num : Nat = 0;
+    for (c in text.chars()) {
+      let digit = switch (c) {
+        case '0' { 0 };
+        case '1' { 1 };
+        case '2' { 2 };
+        case '3' { 3 };
+        case '4' { 4 };
+        case '5' { 5 };
+        case '6' { 6 };
+        case '7' { 7 };
+        case '8' { 8 };
+        case '9' { 9 };
+        case _ { return null };
+      };
+      // Check for overflow before multiplication
+      if (num > maxValue / 10) {
+        Debug.print("Security: parseNatSafe detected overflow");
+        return null;
+      };
+      num := num * 10 + digit;
+      // Check bounds after addition
+      if (num > maxValue) {
+        Debug.print("Security: parseNatSafe value exceeds max " # Nat.toText(maxValue));
+        return null;
+      };
     };
     ?num
   };
@@ -209,6 +260,11 @@ module {
       case _ {
         return #Failed("Invalid proof type for Hoosat verification");
       };
+    };
+
+    // Validate proof.tx_id length
+    if (not validateFieldLength("tx_id", proof.tx_id, Constants.MAX_TX_HASH_LENGTH)) {
+      return #Failed("Transaction ID exceeds maximum length");
     };
 
     try {
@@ -288,8 +344,8 @@ module {
       let amount = switch (extractJsonField(afterTxId, "amount")) {
         case null { return #Failed("Could not extract amount") };
         case (?amountStr) {
-          switch (parseNat(amountStr)) {
-            case null { return #Failed("Invalid amount format") };
+          switch (parseNatSafe(amountStr, Constants.MAX_AMOUNT_VALUE)) {
+            case null { return #Failed("Invalid or out-of-bounds amount") };
             case (?amt) { amt };
           }
         };
@@ -365,6 +421,11 @@ module {
           Debug.print("Hoosat: Found block_hash: " # hash);
           hash
         };
+      };
+
+      // Validate block_hash length
+      if (not validateFieldLength("block_hash", blockHash, Constants.MAX_BLOCK_HASH_LENGTH)) {
+        return #Failed("Block hash exceeds maximum length");
       };
 
       // Get block details to find block height
@@ -485,8 +546,8 @@ module {
       // Extract current block height (virtualDaaScore is a string field in the response)
       let currentHeight = switch (extractJsonField(infoResponseText, "virtualDaaScore")) {
         case (?heightStr) {
-          switch (parseNat(heightStr)) {
-            case null { return #Failed("Invalid virtualDaaScore format") };
+          switch (parseNatSafe(heightStr, Constants.MAX_BLOCK_HEIGHT)) {
+            case null { return #Failed("Invalid or out-of-bounds virtualDaaScore") };
             case (?height) {
               Debug.print("Hoosat: Current virtualDaaScore: " # Nat.toText(height));
               height
@@ -750,6 +811,11 @@ module {
         case null {
           return #err(#InternalError("Could not extract transaction ID"));
         };
+      };
+
+      // Validate tx_id length
+      if (not validateFieldLength("tx_id", tx_id, Constants.MAX_TX_HASH_LENGTH)) {
+        return #err(#InternalError("Transaction ID exceeds maximum length"));
       };
 
       Debug.print("Hoosat: Broadcast successful, tx_id: " # tx_id);

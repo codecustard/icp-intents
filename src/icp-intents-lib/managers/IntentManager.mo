@@ -22,6 +22,7 @@ import TokenRegistry "../tokens/TokenRegistry";
 import ICRC2 "../tokens/ICRC2";
 import Validation "../utils/Validation";
 import Constants "../utils/Constants";
+import RateLimits "../utils/RateLimits";
 
 module {
   type Intent = Types.Intent;
@@ -43,6 +44,10 @@ module {
     token_registry : TokenRegistry.RegistryState;
     event_logger : Events.EventLogger;
     config : SystemConfig;
+    // DoS prevention tracking
+    var user_intent_counts : HashMap.HashMap<Principal, Nat>;
+    var user_active_counts : HashMap.HashMap<Principal, Nat>;
+    var total_cycle_consumption : Nat;
   };
 
   /// Stable storage format
@@ -52,6 +57,10 @@ module {
     escrow : Escrow.StableEscrowData;
     chain_registry : ChainRegistry.StableRegistryData;
     token_registry : TokenRegistry.StableRegistryData;
+    // DoS prevention tracking
+    user_intent_counts : [(Principal, Nat)];
+    user_active_counts : [(Principal, Nat)];
+    total_cycle_consumption : Nat;
   };
 
   /// Hash function for intent IDs (sequential Nat values)
@@ -72,6 +81,10 @@ module {
       token_registry = TokenRegistry.init();
       event_logger = Events.EventLogger();
       config = config;
+      // DoS prevention tracking
+      var user_intent_counts = HashMap.HashMap<Principal, Nat>(100, Principal.equal, Principal.hash);
+      var user_active_counts = HashMap.HashMap<Principal, Nat>(100, Principal.equal, Principal.hash);
+      var total_cycle_consumption = 0;
     }
   };
 
@@ -110,6 +123,75 @@ module {
     }
   };
 
+  /// Check if user can create a new intent (rate limit validation)
+  func canCreateIntent(state : ManagerState, user : Principal) : IntentResult<()> {
+    // Check per-user total intent limit
+    let userTotal = switch (state.user_intent_counts.get(user)) {
+      case null { 0 };
+      case (?count) { count };
+    };
+
+    if (userTotal >= RateLimits.MAX_INTENTS_PER_USER) {
+      return #err(#RateLimitExceeded("User has reached maximum intent limit (" # Nat.toText(RateLimits.MAX_INTENTS_PER_USER) # ")"));
+    };
+
+    // Check per-user active intent limit
+    let userActive = switch (state.user_active_counts.get(user)) {
+      case null { 0 };
+      case (?count) { count };
+    };
+
+    if (userActive >= RateLimits.MAX_ACTIVE_INTENTS_PER_USER) {
+      return #err(#RateLimitExceeded("User has reached maximum active intent limit (" # Nat.toText(RateLimits.MAX_ACTIVE_INTENTS_PER_USER) # ")"));
+    };
+
+    // Check global total intent limit
+    if (state.next_id >= RateLimits.MAX_TOTAL_INTENTS_GLOBAL) {
+      return #err(#RateLimitExceeded("Global intent limit reached"));
+    };
+
+    // Check global active intent limit
+    var globalActive = 0;
+    for (count in state.user_active_counts.vals()) {
+      globalActive += count;
+    };
+
+    if (globalActive >= RateLimits.MAX_ACTIVE_INTENTS_GLOBAL) {
+      return #err(#RateLimitExceeded("Global active intent limit reached"));
+    };
+
+    #ok(())
+  };
+
+  /// Increment user counters after intent creation
+  func incrementUserCounters(state : ManagerState, user : Principal) {
+    // Increment total intent count
+    let currentTotal = switch (state.user_intent_counts.get(user)) {
+      case null { 0 };
+      case (?count) { count };
+    };
+    state.user_intent_counts.put(user, currentTotal + 1);
+
+    // Increment active intent count
+    let currentActive = switch (state.user_active_counts.get(user)) {
+      case null { 0 };
+      case (?count) { count };
+    };
+    state.user_active_counts.put(user, currentActive + 1);
+  };
+
+  /// Decrement active counter when intent becomes terminal
+  func decrementActiveCounter(state : ManagerState, user : Principal) {
+    let currentActive = switch (state.user_active_counts.get(user)) {
+      case null { return }; // Already 0 or never tracked
+      case (?count) {
+        if (count > 0) {
+          state.user_active_counts.put(user, count - 1);
+        };
+      };
+    };
+  };
+
   /// Create a new intent
   public func createIntent(
     state : ManagerState,
@@ -122,6 +204,12 @@ module {
     deadline : Time.Time,
     current_time : Time.Time
   ) : IntentResult<Nat> {
+    // Check rate limits FIRST
+    switch (canCreateIntent(state, user)) {
+      case (#err(e)) { return #err(e) };
+      case (#ok(())) {};
+    };
+
     // Validate inputs
     switch (Validation.validateAmount(source_amount, state.config)) {
       case (?err) { return #err(err) };
@@ -200,6 +288,10 @@ module {
     }));
 
     Debug.print("IntentManager: Created intent #" # Nat.toText(id));
+
+    // Increment user counters after successful creation
+    incrementUserCounters(state, user);
+
     #ok(id)
   };
 
@@ -583,6 +675,10 @@ module {
     }));
 
     Debug.print("IntentManager: Intent #" # Nat.toText(intent_id) # " fulfilled");
+
+    // Decrement active counter after successful fulfillment
+    decrementActiveCounter(state, intent.user);
+
     #ok(fees)
   };
 
@@ -675,6 +771,10 @@ module {
     }));
 
     Debug.print("IntentManager: Intent #" # Nat.toText(intent_id) # " cancelled");
+
+    // Decrement active counter after successful cancellation
+    decrementActiveCounter(state, intent.user);
+
     #ok(())
   };
 
@@ -690,6 +790,139 @@ module {
       func((_, intent)) { intent.user == user }
     );
     Array.map<(Nat, Intent), Intent>(filtered, func((_, intent)) { intent })
+  };
+
+  // DoS Prevention and Monitoring Functions
+
+  /// Clean up old terminal intents to prevent unbounded HashMap growth
+  /// Returns the number of intents cleaned up
+  public func cleanupTerminalIntents(
+    state : ManagerState,
+    retention_period : Int,
+    current_time : Time.Time,
+    max_cleanups : Nat
+  ) : Nat {
+    var cleaned : Nat = 0;
+    let cutoff_time = current_time - retention_period;
+
+    let entries = Iter.toArray(state.intents.entries());
+
+    for ((id, intent) in entries.vals()) {
+      if (cleaned >= max_cleanups) {
+        return cleaned;
+      };
+
+      // Only clean up terminal states that are old enough
+      let is_terminal = switch (intent.status) {
+        case (#Fulfilled) { true };
+        case (#Cancelled) { true };
+        case (#Expired) { true };
+        case _ { false };
+      };
+
+      if (is_terminal and intent.created_at < cutoff_time) {
+        state.intents.delete(id);
+        cleaned += 1;
+      };
+    };
+
+    cleaned
+  };
+
+  /// Get intent statistics
+  public func getIntentStats(state : ManagerState) : {
+    total : Nat;
+    active : Nat;
+    fulfilled : Nat;
+    cancelled : Nat;
+    expired : Nat;
+  } {
+    var active = 0;
+    var fulfilled = 0;
+    var cancelled = 0;
+    var expired = 0;
+
+    for (intent in state.intents.vals()) {
+      switch (intent.status) {
+        case (#PendingQuote or #QuoteReceived or #Confirmed or #Deposited) {
+          active += 1;
+        };
+        case (#Fulfilled) { fulfilled += 1 };
+        case (#Cancelled) { cancelled += 1 };
+        case (#Expired) { expired += 1 };
+      };
+    };
+
+    {
+      total = state.intents.size();
+      active = active;
+      fulfilled = fulfilled;
+      cancelled = cancelled;
+      expired = expired;
+    }
+  };
+
+  /// Get user's cycle budget information
+  public func getUserCycleBudget(state : ManagerState, user : Principal) : ?{
+    total_intents : Nat;
+    active_intents : Nat;
+    remaining_total : Nat;
+    remaining_active : Nat;
+  } {
+    let userTotal = switch (state.user_intent_counts.get(user)) {
+      case null { 0 };
+      case (?count) { count };
+    };
+
+    let userActive = switch (state.user_active_counts.get(user)) {
+      case null { 0 };
+      case (?count) { count };
+    };
+
+    ?{
+      total_intents = userTotal;
+      active_intents = userActive;
+      remaining_total = if (userTotal < RateLimits.MAX_INTENTS_PER_USER) {
+        RateLimits.MAX_INTENTS_PER_USER - userTotal
+      } else { 0 };
+      remaining_active = if (userActive < RateLimits.MAX_ACTIVE_INTENTS_PER_USER) {
+        RateLimits.MAX_ACTIVE_INTENTS_PER_USER - userActive
+      } else { 0 };
+    }
+  };
+
+  /// Get cycle consumption statistics
+  public func getCycleStats(state : ManagerState) : {
+    total_consumed : Nat;
+    global_active : Nat;
+    global_total : Nat;
+    capacity_status : Text;
+  } {
+    var globalActive = 0;
+    for (count in state.user_active_counts.vals()) {
+      globalActive += count;
+    };
+
+    let activePercent = if (RateLimits.MAX_ACTIVE_INTENTS_GLOBAL > 0) {
+      (globalActive * 100) / RateLimits.MAX_ACTIVE_INTENTS_GLOBAL
+    } else { 0 };
+
+    let status = if (activePercent >= 90) {
+      "CRITICAL"
+    } else if (activePercent >= 75) {
+      "WARNING"
+    } else if (activePercent >= 50) {
+      "MODERATE"
+    } else {
+      "HEALTHY"
+    };
+
+    {
+      total_consumed = state.total_cycle_consumption;
+      global_active = globalActive;
+      global_total = state.next_id;
+      capacity_status = status;
+    }
   };
 
   // Token Management Functions
@@ -840,6 +1073,10 @@ module {
       escrow = Escrow.toStable(state.escrow);
       chain_registry = ChainRegistry.toStable(state.chain_registry);
       token_registry = TokenRegistry.toStable(state.token_registry);
+      // DoS prevention tracking
+      user_intent_counts = Iter.toArray(state.user_intent_counts.entries());
+      user_active_counts = Iter.toArray(state.user_active_counts.entries());
+      total_cycle_consumption = state.total_cycle_consumption;
     }
   };
 
@@ -848,6 +1085,17 @@ module {
     let intents_map = HashMap.HashMap<Nat, Intent>(100, Nat.equal, intentIdHash);
     for ((id, intent) in data.intents.vals()) {
       intents_map.put(id, intent);
+    };
+
+    // Restore DoS prevention tracking
+    let user_counts = HashMap.HashMap<Principal, Nat>(100, Principal.equal, Principal.hash);
+    for ((user, count) in data.user_intent_counts.vals()) {
+      user_counts.put(user, count);
+    };
+
+    let active_counts = HashMap.HashMap<Principal, Nat>(100, Principal.equal, Principal.hash);
+    for ((user, count) in data.user_active_counts.vals()) {
+      active_counts.put(user, count);
     };
 
     {
@@ -859,6 +1107,10 @@ module {
       token_registry = TokenRegistry.fromStable(data.token_registry);
       event_logger = Events.EventLogger();
       config = config;
+      // DoS prevention tracking
+      var user_intent_counts = user_counts;
+      var user_active_counts = active_counts;
+      var total_cycle_consumption = data.total_cycle_consumption;
     }
   };
 }

@@ -17,9 +17,10 @@ The SDK underwent comprehensive internal security review in January 2026:
 
 - **3 Critical Fixes**: Authorization bypass, integer underflow, missing auth check
 - **7 High Priority Fixes**: Race condition, time boundaries, quote expiry, info leakage, placeholder removal, state rollback patterns, HTTP outcall resilience
+- **2 Low Priority Fixes**: Cycle exhaustion DoS prevention, JSON parsing robustness
 - **3 Code Quality Improvements**: Constants, event accuracy, parsing consolidation
 
-**All critical and high-priority security issues identified in the review have been resolved.**
+**All security issues identified in the review (12 total) have been resolved.**
 
 See [README Security Section](README.md#recent-security-improvements) for details.
 

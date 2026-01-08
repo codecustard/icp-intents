@@ -15,6 +15,7 @@ import Debug "mo:base/Debug";
 import Types "../core/Types";
 import ChainTypes "../chains/ChainTypes";
 import TECDSA "../crypto/TECDSA";
+import Constants "../utils/Constants";
 
 module {
   type IntentResult<T> = Types.IntentResult<T>;
@@ -273,7 +274,7 @@ module {
         if (not isValidHexString(hex)) {
           return null;
         };
-        hexToNat(hex)
+        hexToNatSafe(hex, Constants.MAX_AMOUNT_VALUE)
       };
     }
   };
@@ -340,6 +341,57 @@ module {
     } else {
       null
     }
+  };
+
+  /// Validate block number is within safe bounds
+  func validateBlockNumber(blockNum : Nat) : Bool {
+    if (blockNum > Constants.MAX_BLOCK_HEIGHT) {
+      Debug.print("Security: block number " # Nat.toText(blockNum) # " exceeds MAX_BLOCK_HEIGHT");
+      return false;
+    };
+    true
+  };
+
+  /// Safe hex-to-nat conversion with overflow protection
+  func hexToNatSafe(hex : Text, maxValue : Nat) : ?Nat {
+    var strippedHex = hex;
+
+    // Strip 0x prefix if present
+    if (Text.startsWith(hex, #text "0x")) {
+      strippedHex := Text.trimStart(hex, #text "0x");
+    };
+
+    // Validate hex string length to prevent memory exhaustion
+    let hexLen = Text.size(strippedHex);
+    if (hexLen > Constants.MAX_JSON_FIELD_LENGTH) {
+      Debug.print("Security: hex string length " # Nat.toText(hexLen) # " exceeds MAX_JSON_FIELD_LENGTH");
+      return null;
+    };
+
+    var result : Nat = 0;
+    for (c in strippedHex.chars()) {
+      let digitOpt = hexCharToNat(c);
+      switch (digitOpt) {
+        case null {
+          Debug.print("Security: invalid hex character in hexToNatSafe");
+          return null;
+        };
+        case (?digit) {
+          // Check for overflow before multiplication
+          if (result > maxValue / 16) {
+            Debug.print("Security: hexToNatSafe detected overflow");
+            return null;
+          };
+          result := result * 16 + digit;
+          // Check bounds after addition
+          if (result > maxValue) {
+            Debug.print("Security: hexToNatSafe value exceeds max " # Nat.toText(maxValue));
+            return null;
+          };
+        };
+      };
+    };
+    ?result
   };
 
   /// Calculate confirmations from block numbers (public for testing)
@@ -451,7 +503,7 @@ module {
           Debug.print("EVM: Block number response: " # json);
           // Response might be just the hex value or wrapped in JSON
           // Try direct hex parsing first
-          switch (hexToNat(json)) {
+          switch (hexToNatSafe(json, Constants.MAX_BLOCK_HEIGHT)) {
             case (?n) { n };
             case null {
               // Try JSON-RPC format: {"result":"0x..."}
@@ -472,7 +524,7 @@ module {
                   required_confirmations = config.min_confirmations;
                 });
               };
-              switch (hexToNat(resultParts[0])) {
+              switch (hexToNatSafe(resultParts[0], Constants.MAX_BLOCK_HEIGHT)) {
                 case (?n) { n };
                 case null {
                   Debug.print("EVM: Invalid block number format - returning Pending");
@@ -529,6 +581,15 @@ module {
     current_block : Nat,
     min_confirmations : Nat
   ) : VerificationResult {
+    // Validate input field lengths
+    if (Text.size(tx_hash) > Constants.MAX_TX_HASH_LENGTH) {
+      return #Failed("Transaction hash exceeds maximum length");
+    };
+
+    if (Text.size(expected_address) > Constants.MAX_ADDRESS_LENGTH) {
+      return #Failed("Expected address exceeds maximum length");
+    };
+
     // Check transaction status
     let status = switch (receipt.status) {
       case (?s) { s };
@@ -543,7 +604,13 @@ module {
 
     // Verify recipient address
     let receipt_to = switch (receipt.to) {
-      case (?t) { Text.toLowercase(t) };
+      case (?t) {
+        // Validate address length
+        if (Text.size(t) > Constants.MAX_ADDRESS_LENGTH) {
+          return #Failed("Receipt address exceeds maximum length");
+        };
+        Text.toLowercase(t)
+      };
       case null {
         return #Failed("Transaction has no recipient");
       };

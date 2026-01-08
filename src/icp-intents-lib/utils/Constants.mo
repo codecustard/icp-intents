@@ -34,4 +34,27 @@ module {
 
   /// Maximum Bitcoin address length
   public let BITCOIN_MAX_ADDRESS_LENGTH : Nat = 62;
+
+  /// JSON parsing security limits
+
+  /// Maximum transaction hash length (hex strings)
+  public let MAX_TX_HASH_LENGTH : Nat = 100;
+
+  /// Maximum block hash length (hex strings)
+  public let MAX_BLOCK_HASH_LENGTH : Nat = 100;
+
+  /// Maximum address length (covers all chain formats)
+  public let MAX_ADDRESS_LENGTH : Nat = 120;
+
+  /// Maximum generic JSON field length
+  public let MAX_JSON_FIELD_LENGTH : Nat = 256;
+
+  /// Maximum block height/number (2^53 - 1, JavaScript safe integer limit)
+  public let MAX_BLOCK_HEIGHT : Nat = 9_007_199_254_740_991;
+
+  /// Maximum token amount value (2^80, supports very large amounts)
+  public let MAX_AMOUNT_VALUE : Nat = 1_208_925_819_614_629_174_706_176;
+
+  /// Maximum confirmations count
+  public let MAX_CONFIRMATIONS : Nat = 100_000;
 }

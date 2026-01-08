@@ -305,6 +305,49 @@ module {
     Errors.isTerminal(error)
   };
 
+  // DoS Prevention and Monitoring Functions
+
+  /// Clean up old terminal intents
+  public func cleanupTerminalIntents(
+    state : ManagerState,
+    retention_period : Int,
+    current_time : Time.Time,
+    max_cleanups : Nat
+  ) : Nat {
+    IntentManager.cleanupTerminalIntents(state, retention_period, current_time, max_cleanups)
+  };
+
+  /// Get intent statistics
+  public func getIntentStats(state : ManagerState) : {
+    total : Nat;
+    active : Nat;
+    fulfilled : Nat;
+    cancelled : Nat;
+    expired : Nat;
+  } {
+    IntentManager.getIntentStats(state)
+  };
+
+  /// Get user's cycle budget information
+  public func getUserCycleBudget(state : ManagerState, user : Principal) : ?{
+    total_intents : Nat;
+    active_intents : Nat;
+    remaining_total : Nat;
+    remaining_active : Nat;
+  } {
+    IntentManager.getUserCycleBudget(state, user)
+  };
+
+  /// Get cycle consumption statistics
+  public func getCycleStats(state : ManagerState) : {
+    total_consumed : Nat;
+    global_active : Nat;
+    global_total : Nat;
+    capacity_status : Text;
+  } {
+    IntentManager.getCycleStats(state)
+  };
+
   // Chain-specific modules (for advanced use cases)
   public let EVMModule = EVM;
   public let HoosatModule = Hoosat;
