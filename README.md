@@ -18,6 +18,7 @@ A Motoko SDK for building cross-chain intent-based exchange systems on the Inter
 - [Quick Start](#quick-start)
 - [SDK Modules](#sdk-modules)
 - [Usage Examples](#usage-examples)
+- [Example Projects](#example-projects)
 - [Testing](#testing)
 - [Security Considerations](#security-considerations)
 - [Migration Guide](#migration-guide)
@@ -186,6 +187,11 @@ actor MyIntentPool {
   // More methods...
 }
 ```
+
+**Next Steps:**
+- See [Example Projects](#example-projects) for complete working examples
+- Check out the [Solver Bot](examples/solver-bot/) to build a solver
+- Review [Usage Examples](#usage-examples) for common patterns
 
 ## 📚 SDK Modules
 
@@ -583,6 +589,66 @@ actor DEX {
   };
 }
 ```
+
+## 📦 Example Projects
+
+The repository includes complete, production-ready examples in the `examples/` directory:
+
+### SimpleIntentPool (Motoko)
+
+A complete intent pool canister demonstrating:
+- Full intent lifecycle implementation
+- EVM and Hoosat chain integration
+- Token registration and escrow
+- Threshold ECDSA address generation
+- HTTP outcall verification
+
+**Location**: `examples/simple-intent-pool/`
+
+**Quick Start**:
+```bash
+dfx start --clean
+dfx deploy SimpleIntentPool
+```
+
+See [SimpleIntentPool README](examples/simple-intent-pool/README.md) for full documentation.
+
+### Solver Bot (TypeScript)
+
+Educational solver bot showing the complete solver workflow:
+- Poll intent pool for new intents
+- Calculate competitive quotes with mock pricing
+- Submit quotes and track confirmations
+- Fulfill deposited intents (simulated)
+
+**Location**: `examples/solver-bot/`
+
+**Features**:
+- Configurable exchange rates via `.env`
+- Auto-generated solver identity
+- Retry logic with exponential backoff
+- Structured logging with colors
+- Mock fulfillment (no real blockchain transactions)
+
+**Quick Start**:
+```bash
+cd examples/solver-bot
+npm install
+cp .env.example .env
+# Edit .env with your canister ID
+npm run dev
+```
+
+**Architecture**:
+```
+Monitor → Filter → Price → Quote → Track → Fulfill
+   ↓         ↓        ↓       ↓       ↓        ↓
+IntentMonitor  →  MockPricing  →  MockFulfillment
+       ↓                ↓               ↓
+  IntentFilter    Exchange Rates   Simulated TX
+```
+
+See [Solver Bot README](examples/solver-bot/README.md) for full documentation and production extension guide.
 
 ## 🧪 Testing
 

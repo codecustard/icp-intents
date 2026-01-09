@@ -143,7 +143,7 @@ module {
   };
 
   /// Parse Nat from text
-  func parseNat(text : Text) : ?Nat {
+  func _parseNat(text : Text) : ?Nat {
     var num : Nat = 0;
     for (c in text.chars()) {
       let digit = switch (c) {
@@ -175,7 +175,7 @@ module {
   };
 
   /// Validate numeric value against maximum bound
-  func validateNumericBounds(fieldName : Text, value : Nat, maxValue : Nat) : Bool {
+  func _validateNumericBounds(fieldName : Text, value : Nat, maxValue : Nat) : Bool {
     if (value > maxValue) {
       Debug.print("Security: " # fieldName # " exceeds max value " # Nat.toText(maxValue) # " (got " # Nat.toText(value) # ")");
       return false;

@@ -1,0 +1,115 @@
+// Candid interface for SimpleIntentPool
+// Generated for use by solver bot example
+
+type IntentStatus = variant {
+  PendingQuote;
+  Quoted;
+  Confirmed;
+  Deposited;
+  Fulfilled;
+  Cancelled;
+  Expired;
+};
+
+type ChainSpec = record {
+  chain : text;
+  chain_id : opt nat64;
+  token : text;
+  network : text;
+};
+
+type Quote = record {
+  solver : principal;
+  output_amount : nat;
+  fee : nat;
+  solver_tip : nat;
+  expiry : int;
+  submitted_at : int;
+  solver_dest_address : opt text;
+};
+
+type Intent = record {
+  id : nat;
+  user : principal;
+  source : ChainSpec;
+  destination : ChainSpec;
+  source_amount : nat;
+  min_output : nat;
+  dest_recipient : text;
+  created_at : int;
+  deadline : int;
+  verified_at : opt int;
+  status : IntentStatus;
+  quotes : vec Quote;
+  selected_quote : opt Quote;
+  escrow_balance : nat;
+  generated_address : opt text;
+  protocol_fee_bps : nat;
+};
+
+type IntentError = variant {
+  NotFound;
+  InvalidStatus : text;
+  Unauthorized;
+  InvalidAmount : text;
+  ChainNotSupported : text;
+  InvalidQuote : text;
+  QuoteExpired;
+  TransferFailed : text;
+  VerificationFailed : text;
+  DeadlineExceeded;
+  InsufficientFunds : text;
+  RateLimitExceeded : text;
+};
+
+type IntentResult = variant {
+  ok : nat;
+  err : IntentError;
+};
+
+type IntentResultUnit = variant {
+  ok;
+  err : IntentError;
+};
+
+type FeeBreakdown = record {
+  protocol_fee : nat;
+  solver_fee : nat;
+  solver_tip : nat;
+  total_fee : nat;
+  net_output : nat;
+};
+
+type IntentResultFeeBreakdown = variant {
+  ok : FeeBreakdown;
+  err : IntentError;
+};
+
+type IntentResultText = variant {
+  ok : text;
+  err : IntentError;
+};
+
+service : {
+  // Token Management
+  "registerToken" : (text, principal, nat8, nat) -> ();
+  "getTokenLedger" : (text) -> (opt principal) query;
+
+  // Intent Lifecycle
+  "createIntent" : (text, text, nat, text, text, nat, text, nat) -> (IntentResult);
+  "submitQuote" : (nat, nat, nat, nat) -> (IntentResultUnit);
+  "confirmQuote" : (nat, principal) -> (IntentResultUnit);
+  "depositTokens" : (nat) -> (IntentResult);
+  "verifyEVMDeposit" : (nat, text) -> (IntentResultUnit);
+  "verifyHoosatDeposit" : (nat, text) -> (IntentResultUnit);
+  "fulfillIntent" : (nat) -> (IntentResultFeeBreakdown);
+  "cancelIntent" : (nat) -> (IntentResultUnit);
+
+  // Query Functions
+  "getIntent" : (nat) -> (opt Intent) query;
+  "getUserIntents" : (principal) -> (vec Intent) query;
+  "getSupportedChains" : () -> (vec text) query;
+  "getEscrowBalance" : (principal, text) -> (nat) query;
+  "getProtocolFees" : () -> (vec record { text; nat }) query;
+  "generateDepositAddress" : (nat) -> (IntentResultText);
+}

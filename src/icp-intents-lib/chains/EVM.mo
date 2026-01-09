@@ -309,7 +309,7 @@ module {
 
   /// Convert hex string to Nat
   /// Assumes hex string has already been validated
-  func hexToNat(hex : Text) : ?Nat {
+  func _hexToNat(hex : Text) : ?Nat {
     let cleanHex = Text.trimStart(hex, #text "0x");
 
     // Empty string after removing 0x
@@ -344,7 +344,7 @@ module {
   };
 
   /// Validate block number is within safe bounds
-  func validateBlockNumber(blockNum : Nat) : Bool {
+  func _validateBlockNumber(blockNum : Nat) : Bool {
     if (blockNum > Constants.MAX_BLOCK_HEIGHT) {
       Debug.print("Security: block number " # Nat.toText(blockNum) # " exceeds MAX_BLOCK_HEIGHT");
       return false;

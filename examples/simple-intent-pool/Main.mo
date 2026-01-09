@@ -235,6 +235,7 @@ persistent actor SimpleIntentPool {
         IntentLib.verifyAndMarkDeposited(
           state,
           intent_id,
+          intent.user,
           data.verified_amount,
           Time.now()
         )
@@ -298,6 +299,7 @@ persistent actor SimpleIntentPool {
         IntentLib.verifyAndMarkDeposited(
           state,
           intent_id,
+          intent.user,
           data.verified_amount,
           Time.now()
         )

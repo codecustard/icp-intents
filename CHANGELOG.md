@@ -182,11 +182,102 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Breaking changes migration guide for v0.2.0
 - SECURITY.md with responsible disclosure policy
 - This CHANGELOG.md
+- **Solver Bot Example** (`examples/solver-bot/`) - Complete TypeScript solver implementation
 
 #### Updated
 - README migration checklist for v0.2.0
 - Pre-production security checklist
 - Test coverage documentation
+- README with Example Projects section showcasing both Motoko and TypeScript examples
+
+#### Solver Bot Example Details
+
+**Location**: `examples/solver-bot/`
+
+**Purpose**: Educational TypeScript/Node.js solver bot demonstrating the complete solver workflow
+
+**Features**:
+- **Intent Monitoring**: Polls intent pool for new intents in PendingQuote/Quoted status
+- **Smart Filtering**: Checks solver capabilities (supported chains/tokens, deadline validation)
+- **Mock Pricing**: Configurable fixed exchange rates via `.env` (e.g., `RATE_ETH_HOO=50000`)
+- **Quote Calculation**: Calculates competitive quotes with profitability checks
+- **Automatic Fulfillment**: Tracks confirmed quotes and fulfills deposited intents
+- **Auto-Generated Identity**: Creates and saves Ed25519 identity on first run
+- **Retry Logic**: Exponential backoff for transient IC call failures
+- **Structured Logging**: Colored console output with debug/info/warn/error levels
+- **Mock Fulfillment**: Simulates token delivery without real blockchain transactions
+
+**Project Structure** (17 TypeScript files):
+```
+examples/solver-bot/
+├── src/
+│   ├── index.ts                  # Main monitoring loop
+│   ├── config.ts                 # Environment configuration
+│   ├── agent.ts                  # IC Agent with identity management
+│   ├── types/intent-pool.ts      # Candid TypeScript types
+│   ├── idl/intent-pool.idl.ts   # IDL factory
+│   ├── monitor/
+│   │   ├── IntentMonitor.ts     # Polling logic
+│   │   └── IntentFilter.ts      # Capability filtering
+│   ├── pricing/MockPricing.ts    # Fixed-rate pricing
+│   ├── fulfillment/MockFulfillment.ts  # Simulated delivery
+│   └── utils/
+│       ├── logger.ts             # Structured logging
+│       └── retry.ts              # Exponential backoff
+├── candid/SimpleIntentPool.did   # Candid interface
+├── package.json                  # NPM dependencies (52 packages)
+├── tsconfig.json                 # TypeScript config
+├── .env.example                  # Configuration template
+└── README.md                     # Comprehensive documentation
+```
+
+**Quick Start**:
+```bash
+cd examples/solver-bot
+npm install                    # Install dependencies
+cp .env.example .env          # Configure environment
+# Edit .env with canister ID
+npm run dev                   # Start bot
+```
+
+**Architecture**:
+```
+Main Loop → IntentMonitor → IntentFilter → MockPricing
+    ↓            ↓               ↓              ↓
+Poll IDs    Get Intent     Check Support   Calculate Quote
+    ↓            ↓               ↓              ↓
+Track IDs   Track Seen    Validate Time   Check Profit
+    ↓            ↓               ↓              ↓
+          Submit Quote → Track Active → MockFulfillment
+```
+
+**Configuration** (via `.env`):
+- IC network selection (local/ic)
+- Solver identity path (auto-generated)
+- Polling interval (default 5s)
+- Minimum profit threshold (basis points)
+- Exchange rates for token pairs
+- Supported chains and tokens
+- Solver fee/tip configuration
+
+**Production Extension Guide**:
+- Replace `MockPricing` with DEX APIs, oracles
+- Replace `MockFulfillment` with real blockchain wallet integrations
+- Add database for intent history and analytics
+- Implement event-driven architecture instead of polling
+- Add health checks, metrics, and alerting
+
+**Dependencies**:
+- `@dfinity/agent` ^1.0.0
+- `@dfinity/candid` ^1.0.0
+- `@dfinity/identity` ^1.0.0
+- `@dfinity/principal` ^1.0.0
+- `dotenv` ^16.0.0
+- TypeScript ^5.0.0
+
+**Build Output**: 44 files (11 JS, 11 .d.ts, 11 .js.map, 11 .d.ts.map)
+
+**Test Status**: ✅ TypeScript compilation successful, 0 vulnerabilities
 
 ### 🧪 Testing
 

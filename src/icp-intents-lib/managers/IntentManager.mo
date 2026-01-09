@@ -182,7 +182,7 @@ module {
 
   /// Decrement active counter when intent becomes terminal
   func decrementActiveCounter(state : ManagerState, user : Principal) {
-    let currentActive = switch (state.user_active_counts.get(user)) {
+    switch (state.user_active_counts.get(user)) {
       case null { return }; // Already 0 or never tracked
       case (?count) {
         if (count > 0) {
@@ -844,7 +844,7 @@ module {
 
     for (intent in state.intents.vals()) {
       switch (intent.status) {
-        case (#PendingQuote or #QuoteReceived or #Confirmed or #Deposited) {
+        case (#PendingQuote or #Quoted or #Confirmed or #Deposited) {
           active += 1;
         };
         case (#Fulfilled) { fulfilled += 1 };
